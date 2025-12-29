@@ -1,0 +1,351 @@
+// HyreLog API - Prisma Schema
+// Phase 0: Foundation with multi-region, archival, and GDPR support
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// Enums
+// ============================================================
+
+enum Region {
+  US
+  EU
+  UK
+  AU
+}
+
+enum ApiKeyScope {
+  COMPANY
+  WORKSPACE
+}
+
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum CompanyMemberRole {
+  ADMIN
+  MEMBER
+}
+
+enum GdprRequestStatus {
+  CUSTOMER_PENDING
+  CUSTOMER_APPROVED
+  HYRELOG_APPROVED
+  PROCESSING
+  DONE
+  REJECTED
+}
+
+enum GdprApprovalType {
+  CUSTOMER_ADMIN
+  HYRELOG_ADMIN
+}
+
+enum ColdStorageProvider {
+  AWS
+  AZURE
+  GCP
+}
+
+// ============================================================
+// Core Models
+// ============================================================
+
+model Company {
+  id         String   @id @default(uuid())
+  name       String
+  dataRegion Region   @default(US)
+  createdAt  DateTime @default(now())
+
+  // Relations
+  members        CompanyMember[]
+  workspaces     Workspace[]
+  apiKeys        ApiKey[]
+  auditEvents    AuditEvent[]
+  archiveObjects ArchiveObject[]
+  gdprRequests   GdprRequest[]
+
+  @@index([dataRegion])
+  @@map("companies")
+}
+
+model CompanyMember {
+  id        String            @id @default(uuid())
+  companyId String
+  email     String
+  role      CompanyMemberRole @default(MEMBER)
+  createdAt DateTime          @default(now())
+
+  // Relations
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Approvals
+  gdprApprovals GdprApproval[]
+
+  @@unique([companyId, email])
+  @@index([companyId])
+  @@index([email])
+  @@map("company_members")
+}
+
+model Workspace {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  createdAt DateTime @default(now())
+
+  // Relations
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  projects       Project[]
+  apiKeys        ApiKey[]
+  auditEvents    AuditEvent[]
+  archiveObjects ArchiveObject[]
+
+  @@index([companyId])
+  @@map("workspaces")
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  createdAt   DateTime @default(now())
+
+  // Relations
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  auditEvents AuditEvent[]
+
+  @@index([workspaceId])
+  @@map("projects")
+}
+
+// ============================================================
+// API Keys
+// ============================================================
+
+model ApiKey {
+  id        String       @id @default(uuid())
+  prefix    String // e.g., "hyk_live_abc123"
+  hashedKey String // bcrypt hash of full key
+  scope     ApiKeyScope
+  status    ApiKeyStatus @default(ACTIVE)
+
+  // Scope references (mutually exclusive)
+  companyId   String?
+  workspaceId String?
+
+  // Expiration
+  expiresAt DateTime?
+
+  // Access control
+  ipAllowlist String[] // Array of allowed IPs (empty = all)
+
+  // Metadata
+  labels String[] // User-defined labels
+
+  // Key rotation
+  rotatedFromId String?
+  rotatedToId   String?
+
+  // Usage tracking
+  lastUsedAt       DateTime?
+  lastUsedIp       String?
+  lastUsedEndpoint String?
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  company   Company?   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([hashedKey])
+  @@index([companyId])
+  @@index([workspaceId])
+  @@index([scope, status])
+  @@map("api_keys")
+}
+
+// ============================================================
+// Audit Events (Core Data Model)
+// ============================================================
+
+model AuditEvent {
+  id          String  @id @default(uuid())
+  companyId   String
+  workspaceId String
+  projectId   String?
+
+  // Event data
+  timestamp DateTime
+  category  String
+  action    String
+
+  // Actor information
+  actorId    String?
+  actorEmail String?
+  actorRole  String?
+
+  // Resource information
+  resourceType String?
+  resourceId   String?
+
+  // Metadata (flexible JSON)
+  metadata Json
+
+  // Request context
+  traceId   String
+  ipAddress String?
+  geo       String? // ISO country code or region
+  userAgent String?
+
+  // Hash chain
+  prevHash String? // Hash of previous event in chain
+  hash     String // SHA-256 hash of this event
+
+  // Region
+  dataRegion Region @default(US)
+
+  // Archival flags
+  archivalCandidate Boolean   @default(false)
+  archived          Boolean   @default(false)
+  archivedAt        DateTime?
+
+  // Cold storage
+  isColdArchived Boolean @default(false)
+  coldArchiveKey String? // S3 key or equivalent
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([timestamp])
+  @@index([category])
+  @@index([action])
+  @@index([dataRegion])
+  @@index([archived, archivalCandidate])
+  @@index([hash])
+  @@map("audit_events")
+}
+
+// ============================================================
+// Region Data Store Configuration
+// ============================================================
+
+model RegionDataStore {
+  id                  String              @id @default(uuid())
+  region              Region              @unique
+  dbUrl               String // Encrypted connection string
+  readOnlyUrl         String? // Read replica URL (optional)
+  s3Bucket            String
+  coldStorageProvider ColdStorageProvider @default(AWS)
+  createdAt           DateTime            @default(now())
+
+  @@map("region_data_stores")
+}
+
+// ============================================================
+// Archive Objects (S3/Storage)
+// ============================================================
+
+model ArchiveObject {
+  id          String  @id @default(uuid())
+  companyId   String
+  workspaceId String?
+  region      Region
+  date        String // YYYY-MM-DD format
+  s3Key       String // Full S3 key path
+  gzSizeBytes Int // Size of gzipped file in bytes
+  sha256      String // SHA-256 hash of the archive file
+
+  // Cold storage
+  isColdArchived Boolean @default(false)
+  coldArchiveKey String? // Glacier/Deep Archive key
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, workspaceId, region, date])
+  @@index([companyId])
+  @@index([region, date])
+  @@index([isColdArchived])
+  @@map("archive_objects")
+}
+
+// ============================================================
+// GDPR Workflows
+// ============================================================
+
+model GdprRequest {
+  id        String @id @default(uuid())
+  companyId String
+
+  // Target of the request
+  targetType  String // e.g., "USER", "WORKSPACE", "PROJECT", "COMPANY"
+  targetValue String // ID or identifier of the target
+
+  // Request type
+  requestType String @default("ANONYMIZE") // For now only ANONYMIZE
+
+  // Status workflow
+  status GdprRequestStatus @default(CUSTOMER_PENDING)
+
+  // Who created it
+  createdByMemberId String
+
+  // Timestamps
+  createdAt          DateTime  @default(now())
+  approvedAtCustomer DateTime?
+  approvedAtHyrelog  DateTime?
+  processedAt        DateTime?
+
+  // Relations
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  approvals GdprApproval[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("gdpr_requests")
+}
+
+model GdprApproval {
+  id            String @id @default(uuid())
+  gdprRequestId String
+
+  // Approver type
+  approverType GdprApprovalType
+
+  // Approver identity (mutually exclusive based on type)
+  approverMemberId String? // For CUSTOMER_ADMIN
+  approverEmail    String? // For HYRELOG_ADMIN
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  gdprRequest GdprRequest    @relation(fields: [gdprRequestId], references: [id], onDelete: Cascade)
+  member      CompanyMember? @relation(fields: [approverMemberId], references: [id], onDelete: SetNull)
+
+  // Ensure uniqueness: one approval per approver type per request
+  @@unique([gdprRequestId, approverType, approverMemberId])
+  @@unique([gdprRequestId, approverType, approverEmail])
+  @@index([gdprRequestId])
+  @@map("gdpr_approvals")
+}

@@ -1,0 +1,82 @@
+import Fastify from 'fastify';
+import { loadConfig } from './lib/config.js';
+import { getLogger } from './lib/logger.js';
+import { getTraceId } from './lib/trace.js';
+import { errorHandlerPlugin } from './plugins/errorHandler.js';
+import { internalAuthPlugin } from './plugins/internalAuth.js';
+import { healthRoutes } from './routes/internal/health.js';
+import { metricsRoutes } from './routes/internal/metrics.js';
+
+async function buildServer() {
+  const logger = getLogger();
+
+  const server = Fastify({
+    logger: logger.child({ service: 'hyrelog-api' }),
+    requestIdLogLabel: 'traceId',
+    genReqId: (request) => getTraceId(request),
+  });
+
+  // Add trace ID to all responses
+  server.addHook('onSend', async (request, reply, payload) => {
+    const traceId = getTraceId(request);
+    reply.header('X-Trace-Id', traceId);
+    return payload;
+  });
+
+  // Register plugins
+  await server.register(errorHandlerPlugin);
+  await server.register(internalAuthPlugin);
+
+  // Register routes
+  await server.register(healthRoutes, { prefix: '/internal' });
+  await server.register(metricsRoutes, { prefix: '/internal' });
+
+  // Root route
+  server.get('/', async (request, reply) => {
+    return reply.send({
+      service: 'hyrelog-api',
+      version: '0.1.0',
+      status: 'running',
+    });
+  });
+
+  return server;
+}
+
+async function start() {
+  const config = loadConfig();
+  const logger = getLogger();
+
+  try {
+    const server = await buildServer();
+
+    await server.listen({
+      port: config.port,
+      host: '0.0.0.0',
+    });
+
+    logger.info(
+      {
+        port: config.port,
+        nodeEnv: config.nodeEnv,
+      },
+      'HyreLog API server started'
+    );
+  } catch (err) {
+    logger.error({ err }, 'Failed to start server');
+    process.exit(1);
+  }
+}
+
+// Start server if this file is run directly
+// Check if this module is the main module
+const isMainModule =
+  import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` ||
+  process.argv[1]?.includes('server.ts') ||
+  process.argv[1]?.includes('server.js');
+
+if (isMainModule) {
+  start();
+}
+
+export { buildServer, start };

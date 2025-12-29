@@ -1,0 +1,111 @@
+{
+	"info": {
+		"_postman_id": "hyrelog-api-collection",
+		"name": "HyreLog API",
+		"description": "HyreLog API - Phase 0 Collection\n\nInternal endpoints for health checks and metrics.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Root",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						""
+					]
+				},
+				"description": "Root endpoint - no authentication required"
+			},
+			"response": []
+		},
+		{
+			"name": "Internal",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "x-internal-token",
+								"value": "{{internal_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/internal/health",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"internal",
+								"health"
+							]
+						},
+						"description": "Health check endpoint - requires internal token"
+					},
+					"response": []
+				},
+				{
+					"name": "Metrics",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "x-internal-token",
+								"value": "{{internal_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/internal/metrics",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"internal",
+								"metrics"
+							]
+						},
+						"description": "Metrics endpoint - requires internal token"
+					},
+					"response": []
+				},
+				{
+					"name": "Health Check (No Token)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/internal/health",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"internal",
+								"health"
+							]
+						},
+						"description": "Test authentication - should return 401"
+					},
+					"response": []
+				}
+			],
+			"description": "Internal endpoints requiring authentication"
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:3000",
+			"type": "string"
+		}
+	]
+}
+

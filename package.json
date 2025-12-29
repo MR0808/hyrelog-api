@@ -1,0 +1,36 @@
+{
+  "name": "hyrelog-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HyreLog API - Immutable audit log API for B2B SaaS",
+  "workspaces": [
+    "services/api",
+    "services/worker",
+    "infra"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=services/api",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write \"**/*.{ts,js,json,md}\" --ignore-path .gitignore",
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\" --ignore-path .gitignore",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "prisma:generate": "npm run prisma:generate --workspace=services/api",
+    "prisma:migrate": "npm run prisma:migrate --workspace=services/api",
+    "prisma:migrate:all": "powershell -ExecutionPolicy Bypass -File ./scripts/migrate-all-regions.ps1",
+    "prisma:studio": "npm run prisma:studio --workspace=services/api",
+    "verify": "powershell -ExecutionPolicy Bypass -File ./scripts/verify-setup.ps1"
+  },
+  "devDependencies": {
+    "@prisma/client": "^7.2.0",
+    "prettier": "^3.2.5",
+    "prisma": "^7.2.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+
