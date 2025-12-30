@@ -56,6 +56,37 @@ enum ColdStorageProvider {
   GCP
 }
 
+enum PlanTier {
+  FREE
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum BillingStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+}
+
+enum WebhookStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum WebhookEventType {
+  AUDIT_EVENT_CREATED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SENDING
+  SUCCEEDED
+  FAILED
+  RETRY_SCHEDULED
+}
+
 // ============================================================
 // Core Models
 // ============================================================
@@ -64,17 +95,29 @@ model Company {
   id         String   @id @default(uuid())
   name       String
   dataRegion Region   @default(US)
-  createdAt  DateTime @default(now())
+  planTier   PlanTier @default(FREE)
+
+  // Billing metadata (Stripe-ready)
+  billingStatus        BillingStatus @default(ACTIVE)
+  stripeCustomerId     String?       @unique
+  stripeSubscriptionId String?       @unique
+  stripePriceId        String?
+  trialEndsAt          DateTime?
+  planOverrides        Json? // For enterprise/custom entitlements
+
+  createdAt DateTime @default(now())
 
   // Relations
-  members        CompanyMember[]
-  workspaces     Workspace[]
-  apiKeys        ApiKey[]
-  auditEvents    AuditEvent[]
-  archiveObjects ArchiveObject[]
-  gdprRequests   GdprRequest[]
+  members          CompanyMember[]
+  workspaces       Workspace[]
+  apiKeys          ApiKey[]
+  auditEvents      AuditEvent[]
+  archiveObjects   ArchiveObject[]
+  gdprRequests     GdprRequest[]
+  webhookEndpoints WebhookEndpoint[]
 
   @@index([dataRegion])
+  @@index([planTier])
   @@map("companies")
 }
 
@@ -104,11 +147,12 @@ model Workspace {
   createdAt DateTime @default(now())
 
   // Relations
-  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  projects       Project[]
-  apiKeys        ApiKey[]
-  auditEvents    AuditEvent[]
-  archiveObjects ArchiveObject[]
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  projects         Project[]
+  apiKeys          ApiKey[]
+  auditEvents      AuditEvent[]
+  archiveObjects   ArchiveObject[]
+  webhookEndpoints WebhookEndpoint[]
 
   @@index([companyId])
   @@map("workspaces")
@@ -121,8 +165,9 @@ model Project {
   createdAt   DateTime @default(now())
 
   // Relations
-  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  auditEvents AuditEvent[]
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  auditEvents      AuditEvent[]
+  webhookEndpoints WebhookEndpoint[]
 
   @@index([workspaceId])
   @@map("projects")
@@ -211,6 +256,9 @@ model AuditEvent {
   prevHash String? // Hash of previous event in chain
   hash     String // SHA-256 hash of this event
 
+  // Idempotency
+  idempotencyHash String? // SHA-256 hash for idempotency checks
+
   // Region
   dataRegion Region @default(US)
 
@@ -226,9 +274,10 @@ model AuditEvent {
   createdAt DateTime @default(now())
 
   // Relations
-  company   Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  project   Project?  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  webhookJobs WebhookJob[]
 
   @@index([companyId])
   @@index([workspaceId])
@@ -239,6 +288,7 @@ model AuditEvent {
   @@index([dataRegion])
   @@index([archived, archivalCandidate])
   @@index([hash])
+  @@index([idempotencyHash])
   @@map("audit_events")
 }
 
@@ -348,4 +398,101 @@ model GdprApproval {
   @@unique([gdprRequestId, approverType, approverEmail])
   @@index([gdprRequestId])
   @@map("gdpr_approvals")
+}
+
+// ============================================================
+// Webhooks (Phase 2)
+// ============================================================
+
+model WebhookEndpoint {
+  id          String  @id @default(uuid())
+  companyId   String
+  workspaceId String
+  projectId   String? // Optional project scope
+
+  // Configuration
+  status          WebhookStatus      @default(ACTIVE)
+  url             String
+  secretHashed    String // SHA-256 hash of the secret (for verification)
+  secretEncrypted String // Encrypted plaintext secret (for signing - decrypt in worker)
+  events          WebhookEventType[] // Array of event types
+
+  // Statistics
+  lastSuccessAt DateTime?
+  lastFailureAt DateTime?
+  failureCount  Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  company   Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  jobs      WebhookJob[]
+
+  @@index([workspaceId])
+  @@index([companyId])
+  @@index([status])
+  @@index([workspaceId, status])
+  @@map("webhook_endpoints")
+}
+
+model WebhookJob {
+  id          String  @id @default(uuid())
+  webhookId   String
+  eventId     String
+  companyId   String
+  workspaceId String
+  projectId   String?
+
+  // Delivery tracking
+  attempt       Int                   @default(1)
+  status        WebhookDeliveryStatus @default(PENDING)
+  nextAttemptAt DateTime              @default(now())
+  lastAttemptAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  webhook  WebhookEndpoint          @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event    AuditEvent               @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  attempts WebhookDeliveryAttempt[]
+
+  @@index([nextAttemptAt, status])
+  @@index([webhookId])
+  @@index([status])
+  @@index([eventId])
+  @@map("webhook_jobs")
+}
+
+model WebhookDeliveryAttempt {
+  id        String @id @default(uuid())
+  jobId     String
+  webhookId String
+  eventId   String
+  attempt   Int
+
+  // Delivery details
+  status            WebhookDeliveryStatus
+  requestUrl        String
+  requestHeaders    Json
+  requestBodySha256 String
+  responseStatus    Int?
+  responseHeaders   Json?
+  errorCode         String?
+  errorMessage      String? // Sanitized error message
+  durationMs        Int?
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  job WebhookJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([webhookId])
+  @@index([eventId])
+  @@index([status])
+  @@map("webhook_delivery_attempts")
 }

@@ -239,11 +239,29 @@ hyrelog-api/
 
 View and edit your database through Prisma Studio:
 
-```bash
-npm run prisma:studio
+**For US Region (default):**
+```powershell
+npm run prisma:studio:us
+```
+
+**For other regions, set DATABASE_URL manually:**
+```powershell
+# EU Region
+$env:DATABASE_URL="postgresql://hyrelog:hyrelog@localhost:54322/hyrelog_eu"
+npm run prisma:studio --workspace=services/api
+
+# UK Region
+$env:DATABASE_URL="postgresql://hyrelog:hyrelog@localhost:54323/hyrelog_uk"
+npm run prisma:studio --workspace=services/api
+
+# AU Region
+$env:DATABASE_URL="postgresql://hyrelog:hyrelog@localhost:54324/hyrelog_au"
+npm run prisma:studio --workspace=services/api
 ```
 
 This opens a web interface at http://localhost:5555 where you can browse and edit data.
+
+**Note:** Prisma Studio connects to one database at a time. Use the appropriate command for the region you want to view.
 
 ### Connect to Databases Directly
 
@@ -298,6 +316,158 @@ After deployment, CDK will output:
 - CloudWatch Log Group names
 
 Save these values - you'll need them to configure your ECS services.
+
+## Plans & Limits
+
+HyreLog offers 4 plan tiers with different feature sets and limits:
+
+### Plan Tiers
+
+- **FREE**: Basic audit logging (7 days retention, 10K export rows)
+- **STARTER**: Streaming exports enabled (30 days retention, 250K export rows)
+- **GROWTH**: Webhooks + exports (90 days retention, 1M export rows, 3 webhooks)
+- **ENTERPRISE**: Full features (180 days retention, unlimited exports, 20 webhooks)
+
+### Feature Gating
+
+- **Webhooks**: Growth+ plans only
+- **Streaming Exports**: Starter+ plans only
+- **Custom Categories**: Starter+ plans only
+
+### Important Notes
+
+- **Retention enforcement**: Coming in Phase 3 (currently not enforced)
+- **Stripe billing integration**: Coming in a future phase (schema is ready)
+- **Plan downgrades**: Features are disabled but data is not deleted
+- **Plan enforcement**: All checks are server-side and cannot be bypassed
+
+See `SECURITY.md` for details on plan enforcement and security.
+
+## Phase 2 - Webhooks
+
+Phase 2 adds signed webhook delivery for near-real-time event notifications.
+
+### Features
+
+- **Webhook Endpoints**: Register webhook URLs at workspace or project scope
+- **Signed Payloads**: HMAC-SHA256 signatures for security
+- **Retry Backoff**: Automatic retries with exponential backoff (5 attempts)
+- **Delivery Tracking**: Full audit trail of all delivery attempts
+- **Plan Gating**: Webhooks available for GROWTH and ENTERPRISE plans only
+
+### Setup
+
+1. **Add webhook encryption key to `.env`**:
+   ```bash
+   # Generate a 32-byte hex key (64 hex characters)
+   # You can use: openssl rand -hex 32
+   WEBHOOK_SECRET_ENCRYPTION_KEY=your_64_character_hex_key_here
+   ```
+
+2. **Run migrations**:
+   ```bash
+   npm run prisma:migrate:all
+   npm run prisma:generate
+   ```
+
+3. **Seed with GROWTH plan** (to test webhooks):
+   ```bash
+   $env:SEED_PLAN_TIER="GROWTH"
+   npm run seed
+   ```
+
+### Testing Webhooks Locally
+
+1. **Start webhook receiver** (in a separate terminal):
+   ```bash
+   node tools/webhook-receiver.js
+   ```
+   This starts a server on `http://localhost:3001` that logs all webhook deliveries.
+
+2. **Start the worker** (in another terminal):
+   ```bash
+   npm run worker
+   ```
+   The worker polls for webhook jobs and processes deliveries.
+
+3. **Create a webhook endpoint**:
+   ```bash
+   curl -X POST "http://localhost:3000/v1/workspaces/{workspace_id}/webhooks" \
+     -H "Authorization: Bearer {company_key}" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "url": "http://localhost:3001",
+       "events": ["AUDIT_EVENT_CREATED"]
+     }'
+   ```
+   
+   **Note**: The response includes a `secret` field - save this! You'll need it to verify signatures.
+
+4. **Ingest an event**:
+   ```bash
+   curl -X POST "http://localhost:3000/v1/events" \
+     -H "Authorization: Bearer {workspace_key}" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "category": "user",
+       "action": "login",
+       "actor": {"email": "user@example.com"}
+     }'
+   ```
+
+5. **Watch the webhook receiver console** - you should see the webhook delivery logged.
+
+6. **Check delivery status**:
+   ```bash
+   curl "http://localhost:3000/v1/webhooks/{webhook_id}/deliveries" \
+     -H "Authorization: Bearer {company_key}"
+   ```
+
+### Webhook Signature Verification
+
+Webhooks are signed with HMAC-SHA256. To verify:
+
+```javascript
+const crypto = require('crypto');
+
+const signature = req.headers['x-hyrelog-signature']; // Format: "v1=<hex>"
+const timestamp = req.headers['x-hyrelog-timestamp'];
+const body = req.body; // Raw JSON string
+
+const providedSig = signature.replace(/^v1=/, '');
+const computedSig = crypto
+  .createHmac('sha256', webhookSecret)
+  .update(body)
+  .digest('hex');
+
+if (providedSig === computedSig) {
+  // Signature is valid
+}
+```
+
+### Retry Schedule
+
+Webhook deliveries are retried up to 5 times:
+- Attempt 1: Immediate
+- Attempt 2: +1 minute
+- Attempt 3: +5 minutes
+- Attempt 4: +30 minutes
+- Attempt 5: +6 hours
+
+After 5 failed attempts, the webhook is marked as permanently failed.
+
+### API Endpoints
+
+- `POST /v1/workspaces/:workspaceId/webhooks` - Create webhook endpoint
+- `GET /v1/workspaces/:workspaceId/webhooks` - List webhooks
+- `POST /v1/webhooks/:webhookId/disable` - Disable webhook
+- `POST /v1/webhooks/:webhookId/enable` - Enable webhook
+- `GET /v1/webhooks/:webhookId/deliveries` - Get delivery attempts
+
+All webhook management endpoints require:
+- Company key authentication
+- IP allowlist on the company key
+- Rate limiting (10 operations/minute)
 
 ## Troubleshooting
 
@@ -367,15 +537,152 @@ If you see "port already in use" errors:
 - [x] Setup instructions
 - [x] Troubleshooting guide
 
-## Next Steps (Phase 1)
+## Phase 1 - Core API MVP
 
-Phase 1 will implement:
-- Business endpoints (`/v1/events`, etc.)
-- API key authentication
-- Rate limiting
+Phase 1 is now complete! The API includes:
+
+### Security Measures
+
+**Key Management Security:**
+- **Company key creation**: Dashboard-only (not available via API)
+- **Key revocation**: Dashboard-only (requires confirmation dialogs)
+- **Workspace key creation**: API-accessible but requires:
+  - Company key with IP allowlist configured
+  - Stricter rate limiting (10 operations/minute)
+  - Comprehensive audit logging
+- **Key rotation**: API-accessible but requires:
+  - Company key with IP allowlist configured
+  - Stricter rate limiting (10 operations/minute)
+  - Comprehensive audit logging
+
+**Why these restrictions?**
+- Company keys are high-privilege and should require dashboard authentication + 2FA
+- Key revocation is destructive and needs proper confirmation
+- Workspace key creation/rotation can be automated but needs IP restrictions
+- All key management operations are logged for audit compliance
+
+The API includes:
+
+✅ **API Key Authentication**
+- Workspace keys (ingest + read within workspace)
+- Company keys (read/export across all workspaces; cannot ingest)
+- HMAC-SHA256 key hashing
+- Cross-region key lookup with caching
+
+✅ **Event Ingestion** (`POST /v1/events`)
+- Append-only events with hash chaining
+- Idempotency support
+- Request context capture (traceId, IP, userAgent)
+- Workspace key authentication required
+
+✅ **Event Query** (`GET /v1/events`)
+- Filtering by category, action, project, workspace, date range
+- Cursor-based pagination
+- Scoped access (company vs workspace)
+
+✅ **Key Management**
+- Create workspace keys (`POST /v1/workspaces/:workspaceId/keys`) - Requires company key with IP allowlist
+- Rotate keys (`POST /v1/keys/:keyId/rotate`) - Requires company key with IP allowlist
+- Key status (`GET /v1/keys/status`) - Read-only, less restrictive
+- **Revoke keys**: Dashboard-only (removed from API for security)
+- **Create company keys**: Dashboard-only (not available via API)
+
+✅ **Rate Limiting**
+- Per API key: 1200 requests/min (configurable)
+- Per IP: 600 requests/min (configurable)
+- Headers on all responses: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
+- 429 responses with `Retry-After` header
+
+✅ **Multi-Region Support**
+- Region-aware request routing
+- Company dataRegion determines database
+- Cross-region API key lookup
+
+### Phase 1 Setup
+
+1. **Add API_KEY_SECRET to .env:**
+   ```powershell
+   # Add to your .env file:
+   API_KEY_SECRET=dev-api-key-secret-change-in-production
+   ```
+
+2. **Run migrations (if not already done):**
+   ```powershell
+   npm run prisma:migrate:all
+   ```
+
+3. **Generate Prisma Client:**
+   ```powershell
+   npm run prisma:generate
+   ```
+
+4. **Seed test data:**
+   ```powershell
+   npm run seed
+   ```
+   
+   This creates:
+   - A Company (Acme Corp)
+   - A Workspace (Production)
+   - A Project (Main App)
+   - A Company API key (for reading/exporting)
+   - A Workspace API key (for ingesting events)
+   
+   **Important**: The seed script prints plaintext API keys to the console. Save these - they're shown only once!
+
+5. **Start the API:**
+   ```powershell
+   npm run dev
+   ```
+
+### Phase 1 API Examples
+
+**Ingest an event (workspace key):**
+```powershell
+$workspaceKey = "hlk_ws_..." # From seed output
+
+curl -X POST http://localhost:3000/v1/events `
+  -H "Authorization: Bearer $workspaceKey" `
+  -H "Content-Type: application/json" `
+  -d '{
+    "category": "user",
+    "action": "login",
+    "actor": {
+      "email": "user@example.com"
+    },
+    "metadata": {
+      "ip": "192.168.1.1"
+    }
+  }'
+```
+
+**Query events (company key):**
+```powershell
+$companyKey = "hlk_co_..." # From seed output
+
+curl "http://localhost:3000/v1/events?limit=10&category=user" `
+  -H "Authorization: Bearer $companyKey"
+```
+
+**Check rate limit headers:**
+All responses include:
+- `X-RateLimit-Limit`: Maximum requests per minute
+- `X-RateLimit-Remaining`: Remaining requests in current window
+- `X-RateLimit-Reset`: ISO timestamp when limit resets
+
+### Phase 1 Postman Collection
+
+Import the Postman collection from `postman/` directory:
+- `HyreLog API.postman_collection.json` - Updated with Phase 1 endpoints
+- `HyreLog Local.postman_environment.json` - Environment variables
+
+## Next Steps (Phase 2+)
+
+Future phases will implement:
 - Real archival processing
 - GDPR anonymization workflow
 - Webhook delivery system
+- Streaming exports
 - ECS Fargate service definitions
 - CI/CD pipelines
 

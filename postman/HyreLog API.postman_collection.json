@@ -2,7 +2,7 @@
 	"info": {
 		"_postman_id": "hyrelog-api-collection",
 		"name": "HyreLog API",
-		"description": "HyreLog API - Phase 0 Collection\n\nInternal endpoints for health checks and metrics.",
+		"description": "HyreLog API - Phase 2.x Collection\n\nCore API MVP with event ingestion, querying, key management, and webhooks.\n\n**Setup:**\n1. Run `npm run seed` (optionally with SEED_PLAN_TIER=GROWTH for webhooks)\n2. Copy the API keys and IDs from seed output\n3. Set them in the Postman environment variables\n4. For webhook testing: start webhook receiver (`node tools/webhook-receiver.js`)",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"item": [
@@ -76,28 +76,447 @@
 						"description": "Metrics endpoint - requires internal token"
 					},
 					"response": []
-				},
-				{
-					"name": "Health Check (No Token)",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{base_url}}/internal/health",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"internal",
-								"health"
-							]
-						},
-						"description": "Test authentication - should return 401"
-					},
-					"response": []
 				}
 			],
 			"description": "Internal endpoints requiring authentication"
+		},
+		{
+			"name": "V1 API",
+			"item": [
+				{
+					"name": "Events",
+					"item": [
+						{
+							"name": "Ingest Event",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{workspace_key}}",
+										"type": "text"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"category\": \"user\",\n  \"action\": \"login\",\n  \"actor\": {\n    \"id\": \"user_123\",\n    \"email\": \"user@example.com\",\n    \"role\": \"admin\"\n  },\n  \"resource\": {\n    \"type\": \"session\",\n    \"id\": \"sess_456\"\n  },\n  \"metadata\": {\n    \"ip\": \"192.168.1.1\",\n    \"userAgent\": \"Mozilla/5.0\"\n  },\n  \"projectId\": \"{{project_id}}\",\n  \"idempotencyKey\": \"optional-unique-key-123\"\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/v1/events",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"events"
+									]
+								},
+								"description": "Ingest an audit event. Requires workspace key.\n\n**Note:** `projectId` and `idempotencyKey` are optional."
+							},
+							"response": []
+						},
+						{
+							"name": "Query Events (Company Key)",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/events?limit=10",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"events"
+									],
+									"query": [
+										{
+											"key": "limit",
+											"value": "10",
+											"description": "Max 200"
+										},
+										{
+											"key": "category",
+											"value": "user",
+											"disabled": true
+										},
+										{
+											"key": "action",
+											"value": "login",
+											"disabled": true
+										},
+										{
+											"key": "workspaceId",
+											"value": "{{workspace_id}}",
+											"disabled": true,
+											"description": "Company keys can filter by workspace"
+										},
+										{
+											"key": "projectId",
+											"value": "{{project_id}}",
+											"disabled": true
+										},
+										{
+											"key": "from",
+											"value": "2024-01-01T00:00:00Z",
+											"disabled": true
+										},
+										{
+											"key": "to",
+											"value": "2024-12-31T23:59:59Z",
+											"disabled": true
+										},
+										{
+											"key": "cursor",
+											"value": "",
+											"disabled": true,
+											"description": "Pagination cursor from previous response"
+										}
+									]
+								},
+								"description": "Query events with filters. Company key can query across all workspaces."
+							},
+							"response": []
+						},
+						{
+							"name": "Query Events (Workspace Key)",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{workspace_key}}",
+										"type": "text"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/events?limit=10",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"events"
+									],
+									"query": [
+										{
+											"key": "limit",
+											"value": "10"
+										},
+										{
+											"key": "category",
+											"value": "user",
+											"disabled": true
+										},
+										{
+											"key": "action",
+											"value": "login",
+											"disabled": true
+										},
+										{
+											"key": "projectId",
+											"value": "{{project_id}}",
+											"disabled": true
+										},
+										{
+											"key": "from",
+											"value": "2024-01-01T00:00:00Z",
+											"disabled": true
+										},
+										{
+											"key": "to",
+											"value": "2024-12-31T23:59:59Z",
+											"disabled": true
+										},
+										{
+											"key": "cursor",
+											"value": "",
+											"disabled": true
+										}
+									]
+								},
+								"description": "Query events with filters. Workspace key can only query its own workspace."
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Keys",
+					"item": [
+						{
+							"name": "Create Workspace Key",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"label\": \"Production Key\",\n  \"expiresAt\": \"2025-12-31T23:59:59Z\",\n  \"ipAllowlist\": [\"127.0.0.1\"]\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/v1/workspaces/{{workspace_id}}/keys",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"workspaces",
+										"{{workspace_id}}",
+										"keys"
+									]
+								},
+								"description": "Create a workspace API key. Requires company key with IP allowlist.\n\n**Security Requirements:**\n- Company key must have IP allowlist configured\n- Rate limited to 10 operations per minute\n- All operations are logged for audit\n\n**Note:** The plaintext key is returned only once in the response.\n\n**Company Key Creation:** Company keys can only be created through the dashboard (not available via API for security)."
+							},
+							"response": []
+						},
+						{
+							"name": "Get Key Status",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text",
+										"description": "Can use company_key or workspace_key"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/keys/status",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"keys",
+										"status"
+									]
+								},
+								"description": "Get status of the authenticated API key.\n\nShows: id, scope, status, expiresAt, lastUsedAt, lastUsedIp, lastUsedEndpoint, healthScore"
+							},
+							"response": []
+						},
+						{
+							"name": "Rotate Key",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/keys/{{key_id}}/rotate",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"keys",
+										"{{key_id}}",
+										"rotate"
+									]
+								},
+								"description": "Rotate an API key. Requires company key with IP allowlist.\n\n**Security Requirements:**\n- Company key must have IP allowlist configured\n- Rate limited to 10 operations per minute\n- All operations are logged for audit\n\n**Note:**\n- Creates a new key and marks the old one as revoked\n- Returns the new plaintext key (shown only once)\n- Set `key_id` environment variable to the key ID you want to rotate\n\n**Revoke Key:** Key revocation is now dashboard-only for security. Use the dashboard to revoke keys with proper confirmation dialogs."
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Webhooks",
+					"item": [
+						{
+							"name": "Create Webhook",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"url\": \"http://localhost:3001\",\n  \"events\": [\"AUDIT_EVENT_CREATED\"]\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/v1/workspaces/{{workspace_id}}/webhooks",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"workspaces",
+										"{{workspace_id}}",
+										"webhooks"
+									]
+								},
+								"description": "Create a webhook endpoint. Requires Growth plan or higher.\n\n**Plan Requirements:**\n- Plan tier must be GROWTH or ENTERPRISE\n- Webhook limit: GROWTH=3, ENTERPRISE=20\n\n**Security Requirements:**\n- Company key with IP allowlist configured\n- Rate limited to 10 operations per minute\n\n**Note:** The `secret` in the response is shown only once - save it for signature verification!"
+							},
+							"response": []
+						},
+						{
+							"name": "List Webhooks",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/workspaces/{{workspace_id}}/webhooks",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"workspaces",
+										"{{workspace_id}}",
+										"webhooks"
+									]
+								},
+								"description": "List all webhooks for a workspace. Does not return secrets."
+							},
+							"response": []
+						},
+						{
+							"name": "Disable Webhook",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/webhooks/{{webhook_id}}/disable",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"webhooks",
+										"{{webhook_id}}",
+										"disable"
+									]
+								},
+								"description": "Disable a webhook endpoint. Requires company key with IP allowlist."
+							},
+							"response": []
+						},
+						{
+							"name": "Enable Webhook",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/webhooks/{{webhook_id}}/enable",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"webhooks",
+										"{{webhook_id}}",
+										"enable"
+									]
+								},
+								"description": "Enable a webhook endpoint. Requires company key with IP allowlist."
+							},
+							"response": []
+						},
+						{
+							"name": "Get Webhook Deliveries",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/webhooks/{{webhook_id}}/deliveries?limit=50",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"webhooks",
+										"{{webhook_id}}",
+										"deliveries"
+									],
+									"query": [
+										{
+											"key": "limit",
+											"value": "50",
+											"disabled": false
+										},
+										{
+											"key": "cursor",
+											"value": "",
+											"disabled": true,
+											"description": "Pagination cursor from previous response"
+										},
+										{
+											"key": "status",
+											"value": "",
+											"disabled": true,
+											"description": "Filter by status: PENDING, SENDING, SUCCEEDED, FAILED, RETRY_SCHEDULED"
+										}
+									]
+								},
+								"description": "Get delivery attempts for a webhook. Shows full audit trail of all delivery attempts."
+							},
+							"response": []
+						}
+					]
+				}
+			],
+			"description": "V1 API endpoints"
 		}
 	],
 	"variable": [
@@ -108,4 +527,3 @@
 		}
 	]
 }
-

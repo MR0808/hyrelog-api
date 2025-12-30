@@ -1,47 +1,119 @@
+import { getLogger } from '../lib/logger.js';
+import { getRegionRouter } from '../lib/regionRouter.js';
+import { processWebhookJob } from '../lib/webhookDelivery.js';
+import { loadConfig } from '../lib/config.js';
+
+const logger = getLogger();
+
 /**
- * Webhook Worker - Delivery Retry/Backoff
- *
- * Phase 0: Placeholder describing the webhook delivery workflow
- * Phase 1: Full implementation
- *
- * Workflow:
- * 1. Process webhook delivery jobs from queue
- * 2. Attempt delivery to customer endpoint
- * 3. Verify signature (HMAC-SHA256)
- * 4. Retry schedule:
- *    - Initial: immediate
- *    - Retry 1: 1 minute
- *    - Retry 2: 5 minutes
- *    - Retry 3: 15 minutes
- *    - Retry 4: 1 hour
- *    - Retry 5: 6 hours
- *    - Retry 6: 24 hours
- *    - Max retries: 6
- * 5. On success: mark as delivered, log delivery time
- * 6. On failure after max retries: mark as failed, notify customer
- *
- * Signature format:
- * - Header: X-Hyrelog-Signature
- * - Value: t=<timestamp>,v1=<hmac_sha256>
+ * Webhook Worker
+ * 
+ * Polls for due webhook jobs and processes them with retry backoff.
+ * Region-aware: processes jobs from all regions.
  */
+export async function processWebhookJobs(): Promise<void> {
+  const config = loadConfig();
+  const regionRouter = getRegionRouter();
+  const regions = regionRouter.getAllRegions();
 
-export const webhookWorker = {
-  name: 'webhook-worker',
-  description: 'Webhook delivery with retry/backoff',
+  const now = new Date();
 
-  async process(webhookJobId: string) {
-    // Phase 0: Placeholder
-    console.log('[WEBHOOK WORKER] Placeholder - not implemented in Phase 0');
-    console.log(`[WEBHOOK WORKER] Processing job: ${webhookJobId}`);
-    console.log('[WEBHOOK WORKER] Steps:');
-    console.log('  1. Load webhook job from queue');
-    console.log('  2. Generate HMAC-SHA256 signature');
-    console.log('  3. POST to customer endpoint with signature header');
-    console.log('  4. Retry schedule:');
-    console.log('     - Immediate, 1m, 5m, 15m, 1h, 6h, 24h');
-    console.log('     - Max 6 retries');
-    console.log('  5. On success: mark delivered');
-    console.log('  6. On failure: mark failed, notify customer');
-  },
-};
+  for (const region of regions) {
+    const prisma = regionRouter.getPrisma(region);
 
+    try {
+      // Find due jobs (nextAttemptAt <= now, status PENDING or RETRY_SCHEDULED)
+      const dueJobs = await prisma.webhookJob.findMany({
+        where: {
+          nextAttemptAt: {
+            lte: now,
+          },
+          status: {
+            in: ['PENDING', 'RETRY_SCHEDULED'],
+          },
+        },
+        take: 10, // Process up to 10 jobs per region per cycle
+        orderBy: {
+          nextAttemptAt: 'asc',
+        },
+      });
+
+      if (dueJobs.length === 0) {
+        continue;
+      }
+
+      logger.info(
+        {
+          region,
+          jobCount: dueJobs.length,
+        },
+        'Processing webhook jobs'
+      );
+
+      // Process each job
+      for (const job of dueJobs) {
+        try {
+          await processWebhookJob(prisma, job.id);
+          logger.debug({ region, jobId: job.id }, 'Webhook job processed');
+        } catch (error: any) {
+          logger.error(
+            {
+              err: error,
+              region,
+              jobId: job.id,
+            },
+            'Failed to process webhook job'
+          );
+
+          // Mark job as failed if processing error
+          await prisma.webhookJob.update({
+            where: { id: job.id },
+            data: {
+              status: 'FAILED',
+            },
+          }).catch((updateError: any) => {
+            logger.error(
+              { err: updateError, jobId: job.id },
+              'Failed to mark job as failed'
+            );
+          });
+        }
+      }
+    } catch (error: any) {
+      logger.error(
+        {
+          err: error,
+          region,
+        },
+        'Error processing webhook jobs for region'
+      );
+    }
+  }
+}
+
+/**
+ * Start webhook worker loop
+ */
+export async function startWebhookWorker(): Promise<void> {
+  const config = loadConfig();
+  const pollIntervalMs = config.workerPollIntervalSeconds * 1000;
+
+  logger.info(
+    {
+      pollIntervalSeconds: config.workerPollIntervalSeconds,
+    },
+    'Starting webhook worker'
+  );
+
+  // Main loop
+  while (true) {
+    try {
+      await processWebhookJobs();
+    } catch (error: any) {
+      logger.error({ err: error }, 'Error in webhook worker loop');
+    }
+
+    // Sleep before next poll
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}

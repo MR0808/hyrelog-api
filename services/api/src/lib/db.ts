@@ -1,4 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+// Import PrismaClient from generated client
+import { PrismaClient } from '../../node_modules/.prisma/client/index.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { getDatabaseUrl, loadConfig, type Region } from './config.js';

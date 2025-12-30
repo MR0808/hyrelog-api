@@ -12,6 +12,11 @@
  * 5. Update events: set archived=true, archivedAt=now()
  * 6. Create ArchiveObject records
  * 7. Schedule cold storage transition (via S3 lifecycle rules)
+ *
+ * TODO Phase 3: enforce hotRetentionDays per plan
+ * - Query companies and get their planTier
+ * - Use getPlanConfig(planTier).hotRetentionDays to determine which events to archive
+ * - Respect archiveRetentionDays and coldArchiveAfterDays per plan
  */
 
 export const archivalJob = {

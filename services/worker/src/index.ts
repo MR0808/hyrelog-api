@@ -1,48 +1,42 @@
 /**
  * HyreLog Worker Service
- * Phase 0: Placeholder worker runner
+ * Phase 2: Webhook delivery worker
  *
- * In Phase 1, this will:
- * - Connect to a job queue (SQS, BullMQ, etc.)
- * - Process archival jobs
- * - Process GDPR anonymization jobs
- * - Process webhook delivery jobs
+ * Processes webhook delivery jobs with retry backoff.
+ * Region-aware: processes jobs from all regions.
  */
 
-import { archivalJob } from './jobs/archivalJob.js';
-import { gdprWorker } from './jobs/gdprWorker.js';
-import { webhookWorker } from './jobs/webhookWorker.js';
+import { getLogger } from './lib/logger.js';
+import { startWebhookWorker } from './jobs/webhookWorker.js';
+import { getRegionRouter } from './lib/regionRouter.js';
+
+const logger = getLogger();
 
 async function main() {
-  console.log('HyreLog Worker Service - Phase 0 (Placeholder)');
-  console.log('==============================================');
-  console.log('');
-  console.log('Worker jobs defined:');
-  console.log('  - Archival Job (daily archival pipeline)');
-  console.log('  - GDPR Worker (anonymization workflow)');
-  console.log('  - Webhook Worker (delivery retry/backoff)');
-  console.log('');
-  console.log('In Phase 1, this service will:');
-  console.log('  - Connect to job queue');
-  console.log('  - Process jobs from queue');
-  console.log('  - Handle retries and failures');
-  console.log('');
+  logger.info('Starting HyreLog Worker Service (Phase 2: Webhooks)');
 
-  // Placeholder: In Phase 1, these will be actual job processors
-  // For now, just log that they exist
-  console.log('Job placeholders loaded:');
-  console.log(`  - ${archivalJob.name}`);
-  console.log(`  - ${gdprWorker.name}`);
-  console.log(`  - ${webhookWorker.name}`);
-  console.log('');
+  // Handle graceful shutdown
+  const shutdown = async () => {
+    logger.info('Shutting down worker...');
+    const regionRouter = getRegionRouter();
+    await regionRouter.disconnectAll();
+    process.exit(0);
+  };
 
-  // Keep process alive (in Phase 1, this will be the queue listener loop)
-  console.log('Worker service running (placeholder mode)...');
-  console.log('Press Ctrl+C to exit');
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  // Start webhook worker
+  try {
+    await startWebhookWorker();
+  } catch (error: any) {
+    logger.error({ err: error }, 'Worker service failed');
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {
-  console.error('Worker service failed to start:', err);
+  logger.error({ err }, 'Failed to start worker service');
   process.exit(1);
 });
 
