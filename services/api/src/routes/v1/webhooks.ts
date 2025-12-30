@@ -15,9 +15,9 @@ import {
   encryptWebhookSecret,
 } from '../../lib/webhookEncryption.js';
 import {
-  requireFeature,
-  requireLimit,
-  getLimit,
+  requireCompanyFeature,
+  requireCompanyLimit,
+  getCompanyLimit,
   PlanRestrictionError,
 } from '../../lib/plans.js';
 import { createHash } from 'crypto';
@@ -179,7 +179,7 @@ export const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
     // PLAN GATING: Check if webhooks are enabled for this plan
     const company = await prisma.company.findUnique({
       where: { id: request.apiKey.companyId },
-      select: { planTier: true },
+      select: { planTier: true, planOverrides: true },
     });
 
     if (!company) {
@@ -190,7 +190,7 @@ export const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      requireFeature(company.planTier, 'webhooksEnabled', 'GROWTH');
+      requireCompanyFeature(company, 'webhooksEnabled', 'GROWTH');
     } catch (error) {
       if (error instanceof PlanRestrictionError) {
         return reply.code(403).send({
@@ -213,10 +213,10 @@ export const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
     // Check if adding one more webhook would exceed the limit
     const newCount = existingWebhooks + 1;
     try {
-      requireLimit(company.planTier, 'maxWebhooks', newCount, 'GROWTH');
+      requireCompanyLimit(company, 'maxWebhooks', newCount, 'GROWTH');
     } catch (error) {
       if (error instanceof PlanRestrictionError) {
-        const limit = getLimit(company.planTier, 'maxWebhooks');
+        const limit = getCompanyLimit(company, 'maxWebhooks');
         return reply.code(403).send({
           error: `Webhook limit exceeded. Current plan allows ${limit} webhooks (you have ${existingWebhooks}, attempting to create ${newCount}).`,
           code: 'PLAN_RESTRICTED',

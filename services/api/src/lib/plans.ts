@@ -3,10 +3,17 @@
  * 
  * This is the ONLY place plan rules and configurations live.
  * All plan-related logic should flow through this module.
+ * 
+ * Supports:
+ * - Base plan configurations (FREE, STARTER, GROWTH, ENTERPRISE)
+ * - Custom enterprise plans via planOverrides (JSON field on Company)
+ * - Runtime plan limit changes (edit PLAN_CONFIGS and restart server)
  */
 
-// PlanTier enum values (matches Prisma schema)
-export type PlanTier = 'FREE' | 'STARTER' | 'GROWTH' | 'ENTERPRISE';
+import type { Company, PlanTier } from '../../node_modules/.prisma/client/index.js';
+
+// Re-export PlanTier for convenience
+export type { PlanTier };
 
 /**
  * Plan configuration interface
@@ -68,29 +75,66 @@ const PLAN_CONFIGS: Record<PlanTier, PlanConfig> = {
 
 /**
  * Get plan configuration for a plan tier
+ * Optionally merges with planOverrides from Company model
  */
-export function getPlanConfig(planTier: PlanTier): PlanConfig {
-  return PLAN_CONFIGS[planTier];
+export function getPlanConfig(planTier: PlanTier, planOverrides?: any): PlanConfig {
+  const baseConfig = PLAN_CONFIGS[planTier];
+  
+  // If no overrides, return base config
+  if (!planOverrides || typeof planOverrides !== 'object') {
+    return baseConfig;
+  }
+  
+  // Merge base config with overrides (shallow merge)
+  return {
+    ...baseConfig,
+    ...planOverrides,
+  };
+}
+
+/**
+ * Get plan configuration from a Company object
+ * Automatically applies planOverrides if present
+ */
+export function getCompanyPlanConfig(company: Pick<Company, 'planTier' | 'planOverrides'>): PlanConfig {
+  return getPlanConfig(company.planTier, company.planOverrides as any);
 }
 
 /**
  * Check if a plan tier has a specific feature enabled
  */
-export function hasFeature(planTier: PlanTier, featureName: keyof PlanConfig): boolean {
-  const config = getPlanConfig(planTier);
+export function hasFeature(planTier: PlanTier, featureName: keyof PlanConfig, planOverrides?: any): boolean {
+  const config = getPlanConfig(planTier, planOverrides);
+  return config[featureName] === true;
+}
+
+/**
+ * Check if a company has a specific feature enabled
+ * Automatically applies planOverrides if present
+ */
+export function companyHasFeature(company: Pick<Company, 'planTier' | 'planOverrides'>, featureName: keyof PlanConfig): boolean {
+  const config = getCompanyPlanConfig(company);
   return config[featureName] === true;
 }
 
 /**
  * Get a limit value for a plan tier
  */
-export function getLimit(planTier: PlanTier, limitName: keyof PlanConfig): number {
-  const config = getPlanConfig(planTier);
+export function getLimit(planTier: PlanTier, limitName: keyof PlanConfig, planOverrides?: any): number {
+  const config = getPlanConfig(planTier, planOverrides);
   const value = config[limitName];
   if (typeof value !== 'number') {
     throw new Error(`Limit ${limitName} is not a number for plan ${planTier}`);
   }
   return value;
+}
+
+/**
+ * Get a limit value from a Company object
+ * Automatically applies planOverrides if present
+ */
+export function getCompanyLimit(company: Pick<Company, 'planTier' | 'planOverrides'>, limitName: keyof PlanConfig): number {
+  return getLimit(company.planTier, limitName, company.planOverrides as any);
 }
 
 /**
@@ -114,10 +158,21 @@ export class PlanRestrictionError extends Error {
 export function requireFeature(
   planTier: PlanTier,
   featureName: keyof PlanConfig,
-  requiredPlan?: PlanTier
+  requiredPlan?: PlanTier,
+  planOverrides?: any
 ): void {
-  if (!hasFeature(planTier, featureName)) {
+  if (!hasFeature(planTier, featureName, planOverrides)) {
     throw new PlanRestrictionError(planTier, featureName as string, requiredPlan);
+  }
+}
+
+/**
+ * Require a feature from a Company object
+ * Automatically applies planOverrides if present
+ */
+export function requireCompanyFeature(company: Pick<Company, 'planTier' | 'planOverrides'>, featureName: keyof PlanConfig, requiredPlan?: PlanTier): void {
+  if (!companyHasFeature(company, featureName)) {
+    throw new PlanRestrictionError(company.planTier, featureName as string, requiredPlan);
   }
 }
 
@@ -129,9 +184,10 @@ export function requireLimit(
   planTier: PlanTier,
   limitName: keyof PlanConfig,
   currentValue: number,
-  requiredPlan?: PlanTier
+  requiredPlan?: PlanTier,
+  planOverrides?: any
 ): void {
-  const limit = getLimit(planTier, limitName);
+  const limit = getLimit(planTier, limitName, planOverrides);
   // Use > instead of >= to allow creating up to the limit
   // e.g., if limit is 3, allow creating when currentValue is 0, 1, or 2
   // but block when currentValue would be 3 or more
@@ -141,6 +197,24 @@ export function requireLimit(
       : '';
     throw new PlanRestrictionError(
       planTier,
+      `${limitName} limit exceeded (${currentValue}/${limit})`,
+      requiredPlan
+    );
+  }
+}
+
+/**
+ * Require a limit from a Company object
+ * Automatically applies planOverrides if present
+ */
+export function requireCompanyLimit(company: Pick<Company, 'planTier' | 'planOverrides'>, limitName: keyof PlanConfig, currentValue: number, requiredPlan?: PlanTier): void {
+  const limit = getCompanyLimit(company, limitName);
+  if (currentValue > limit) {
+    const requiredPlanMsg = requiredPlan
+      ? ` Requires ${requiredPlan} plan or higher.`
+      : '';
+    throw new PlanRestrictionError(
+      company.planTier,
       `${limitName} limit exceeded (${currentValue}/${limit})`,
       requiredPlan
     );

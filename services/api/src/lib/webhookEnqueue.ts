@@ -1,5 +1,5 @@
 import { getLogger } from './logger.js';
-import { hasFeature } from './plans.js';
+import { companyHasFeature } from './plans.js';
 import type { PrismaClient } from '../../node_modules/.prisma/client/index.js';
 
 const logger = getLogger();
@@ -21,12 +21,13 @@ export async function enqueueWebhookJobs(
   traceId: string
 ): Promise<void> {
   try {
-    // Get company to check plan tier
+    // Get company to check plan tier and overrides
     const company = await prisma.company.findUnique({
       where: { id: companyId },
       select: {
         id: true,
         planTier: true,
+        planOverrides: true,
       },
     });
 
@@ -35,11 +36,11 @@ export async function enqueueWebhookJobs(
       return;
     }
 
-    // PLAN GATING: Check if webhooks are enabled for this plan
-    if (!hasFeature(company.planTier, 'webhooksEnabled')) {
+    // PLAN GATING: Check if webhooks are enabled for this plan (includes planOverrides)
+    if (!companyHasFeature(company, 'webhooksEnabled')) {
       // Plan doesn't support webhooks - skip enqueue (non-blocking)
       logger.debug(
-        { traceId, companyId, planTier: company.planTier },
+        { traceId, companyId, planTier: company.planTier, hasOverrides: !!company.planOverrides },
         'Skipping webhook enqueue - plan does not support webhooks'
       );
       return;

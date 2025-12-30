@@ -63,6 +63,11 @@ enum PlanTier {
   ENTERPRISE
 }
 
+enum PlanType {
+  STANDARD  // Pre-defined plans (FREE, STARTER, GROWTH, ENTERPRISE)
+  CUSTOM   // Custom plans created by admin
+}
+
 enum BillingStatus {
   ACTIVE
   TRIALING
@@ -88,6 +93,43 @@ enum WebhookDeliveryStatus {
 }
 
 // ============================================================
+// Plan Management (Database-Driven)
+// ============================================================
+
+model Plan {
+  id        String   @id @default(uuid())
+  name      String   @unique // e.g., "Free", "Starter", "Growth", "Enterprise", "Acme Corp Custom"
+  planTier  PlanTier // For standard plans (FREE, STARTER, GROWTH, ENTERPRISE)
+  planType  PlanType @default(STANDARD) // STANDARD or CUSTOM
+  
+  // Plan configuration (stored in DB for admin dashboard management)
+  webhooksEnabled        Boolean @default(false)
+  maxWebhooks            Int     @default(0)
+  streamingExportsEnabled Boolean @default(false)
+  maxExportRows          BigInt  @default(10000)
+  hotRetentionDays       Int     @default(7)
+  archiveRetentionDays   Int?
+  coldArchiveAfterDays   Int?
+  allowCustomCategories  Boolean @default(false)
+  
+  // Metadata
+  description String?  // Optional description for admin dashboard
+  isActive    Boolean  @default(true) // Can disable plans without deleting
+  isDefault   Boolean  @default(false) // Mark default plan for new companies
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  companies Company[]
+  
+  @@index([planType])
+  @@index([planTier])
+  @@index([isActive])
+  @@map("plans")
+}
+
+// ============================================================
 // Core Models
 // ============================================================
 
@@ -95,31 +137,36 @@ model Company {
   id         String   @id @default(uuid())
   name       String
   dataRegion Region   @default(US)
-  planTier   PlanTier @default(FREE)
+  
+  // Plan assignment (database-driven)
+  planId     String   // References Plan (standard or custom) - required after migration
+  planTier   PlanTier @default(FREE) // For reference only, planId is source of truth
+  planOverrides Json? // Per-company overrides (takes precedence over plan config)
 
   // Billing metadata (Stripe-ready)
   billingStatus        BillingStatus @default(ACTIVE)
   stripeCustomerId     String?       @unique
   stripeSubscriptionId String?       @unique
-  stripePriceId        String?
-  trialEndsAt          DateTime?
-  planOverrides        Json? // For enterprise/custom entitlements
+  stripePriceId         String?
+  trialEndsAt           DateTime?
 
   createdAt DateTime @default(now())
 
-  // Relations
-  members          CompanyMember[]
-  workspaces       Workspace[]
-  apiKeys          ApiKey[]
-  auditEvents      AuditEvent[]
-  archiveObjects   ArchiveObject[]
-  gdprRequests     GdprRequest[]
-  webhookEndpoints WebhookEndpoint[]
+    // Relations
+    plan            Plan              @relation(fields: [planId], references: [id], onDelete: Restrict)
+    members         CompanyMember[]
+    workspaces      Workspace[]
+    apiKeys         ApiKey[]
+    auditEvents     AuditEvent[]
+    archiveObjects  ArchiveObject[]
+    gdprRequests    GdprRequest[]
+    webhookEndpoints WebhookEndpoint[]
 
-  @@index([dataRegion])
-  @@index([planTier])
-  @@map("companies")
-}
+    @@index([dataRegion])
+    @@index([planTier]) // DEPRECATED: Keep for backward compatibility
+    @@index([planId])
+    @@map("companies")
+  }
 
 model CompanyMember {
   id        String            @id @default(uuid())

@@ -94,11 +94,96 @@ async function seed() {
 
     console.log('✅ Cleared existing data\n');
 
+    // Clear plans (but we'll recreate standard plans)
+    await prisma.plan.deleteMany({});
+
+    console.log('📦 Creating standard plans...\n');
+
+    // Create standard plans (FREE, STARTER, GROWTH, ENTERPRISE)
+    const freePlan = await prisma.plan.create({
+      data: {
+        name: 'Free',
+        planTier: 'FREE',
+        planType: 'STANDARD',
+        webhooksEnabled: false,
+        maxWebhooks: 0,
+        streamingExportsEnabled: false,
+        maxExportRows: 10000,
+        hotRetentionDays: 7,
+        allowCustomCategories: false,
+        isDefault: true, // Default plan for new companies
+        description: 'Free plan with basic features',
+      },
+    });
+    console.log(`✅ Created plan: ${freePlan.name} (${freePlan.id})`);
+
+    const starterPlan = await prisma.plan.create({
+      data: {
+        name: 'Starter',
+        planTier: 'STARTER',
+        planType: 'STANDARD',
+        webhooksEnabled: false,
+        maxWebhooks: 0,
+        streamingExportsEnabled: true,
+        maxExportRows: 250000,
+        hotRetentionDays: 30,
+        archiveRetentionDays: 180,
+        allowCustomCategories: true,
+        description: 'Starter plan with streaming exports',
+      },
+    });
+    console.log(`✅ Created plan: ${starterPlan.name} (${starterPlan.id})`);
+
+    const growthPlan = await prisma.plan.create({
+      data: {
+        name: 'Growth',
+        planTier: 'GROWTH',
+        planType: 'STANDARD',
+        webhooksEnabled: true,
+        maxWebhooks: 3,
+        streamingExportsEnabled: true,
+        maxExportRows: 1000000,
+        hotRetentionDays: 90,
+        archiveRetentionDays: 365,
+        coldArchiveAfterDays: 365,
+        allowCustomCategories: true,
+        description: 'Growth plan with webhooks and extended retention',
+      },
+    });
+    console.log(`✅ Created plan: ${growthPlan.name} (${growthPlan.id})`);
+
+    const enterprisePlan = await prisma.plan.create({
+      data: {
+        name: 'Enterprise',
+        planTier: 'ENTERPRISE',
+        planType: 'STANDARD',
+        webhooksEnabled: true,
+        maxWebhooks: 20,
+        streamingExportsEnabled: true,
+        maxExportRows: BigInt('999999999999'), // Effectively unlimited
+        hotRetentionDays: 180,
+        archiveRetentionDays: 2555, // ~7 years
+        coldArchiveAfterDays: 365,
+        allowCustomCategories: true,
+        description: 'Enterprise plan with maximum limits',
+      },
+    });
+    console.log(`✅ Created plan: ${enterprisePlan.name} (${enterprisePlan.id})\n`);
+
     // Determine plan tier from environment (default: FREE)
     const planTier = (process.env.SEED_PLAN_TIER || 'FREE').toUpperCase() as 'FREE' | 'STARTER' | 'GROWTH' | 'ENTERPRISE';
     if (!['FREE', 'STARTER', 'GROWTH', 'ENTERPRISE'].includes(planTier)) {
       throw new Error(`Invalid SEED_PLAN_TIER: ${planTier}. Must be FREE, STARTER, GROWTH, or ENTERPRISE`);
     }
+
+    // Get the plan for the selected tier
+    const planMap = {
+      FREE: freePlan,
+      STARTER: starterPlan,
+      GROWTH: growthPlan,
+      ENTERPRISE: enterprisePlan,
+    };
+    const selectedPlan = planMap[planTier];
 
     // Determine billing status and trial end
     // FREE: billingStatus=ACTIVE (no trial)
@@ -107,18 +192,20 @@ async function seed() {
     const billingStatus = isFree ? 'ACTIVE' : 'TRIALING';
     const trialEndsAt = isFree ? null : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // +14 days
 
-    // Create Company
+    // Create Company with planId
     const company = await prisma.company.create({
       data: {
         name: 'Acme Corp',
         dataRegion: region,
-        planTier,
+        planId: selectedPlan.id,
+        planTier, // Keep for reference, but planId is the source of truth
         billingStatus,
         trialEndsAt,
       },
     });
     console.log(`✅ Created company: ${company.id} (${company.name})`);
-    console.log(`   Plan: ${company.planTier}`);
+    console.log(`   Plan: ${selectedPlan.name} (${company.planTier})`);
+    console.log(`   Plan ID: ${company.planId}`);
     console.log(`   Billing Status: ${company.billingStatus}`);
     if (company.trialEndsAt) {
       console.log(`   Trial Ends: ${company.trialEndsAt.toISOString()}`);
@@ -199,7 +286,8 @@ async function seed() {
     console.log(`   Company ID: ${company.id}`);
     console.log(`   Workspace ID: ${workspace.id}`);
     console.log(`   Project ID: ${project.id}`);
-    console.log(`   Plan Tier: ${company.planTier}`);
+    console.log(`   Plan: ${selectedPlan.name} (${company.planTier})`);
+    console.log(`   Plan ID: ${company.planId}`);
     console.log(`   Billing Status: ${company.billingStatus}`);
     if (company.trialEndsAt) {
       console.log(`   Trial Ends: ${company.trialEndsAt.toISOString()}`);
