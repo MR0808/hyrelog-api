@@ -24,7 +24,12 @@
         "prisma:studio:us": "powershell -Command \"$env:DATABASE_URL='postgresql://hyrelog:hyrelog@localhost:54321/hyrelog_us'; npm run prisma:studio --workspace=services/api\"",
     "seed": "npm run prisma:seed --workspace=services/api",
     "worker": "npm run dev --workspace=services/worker",
-    "verify": "powershell -ExecutionPolicy Bypass -File ./scripts/verify-setup.ps1"
+    "verify": "powershell -ExecutionPolicy Bypass -File ./scripts/verify-setup.ps1",
+    "test:exports": "powershell -ExecutionPolicy Bypass -File ./scripts/test-exports.ps1",
+    "test:worker": "powershell -ExecutionPolicy Bypass -File ./scripts/test-worker-jobs.ps1",
+    "test:export-download": "powershell -ExecutionPolicy Bypass -File ./scripts/test-export-download.ps1",
+    "minio:create-buckets": "node scripts/create-minio-buckets.js",
+    "unmark-cold-archived": "tsx scripts/unmark-cold-archived.js"
   },
   "devDependencies": {
     "@prisma/client": "^7.2.0",

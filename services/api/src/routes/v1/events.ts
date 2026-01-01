@@ -162,30 +162,39 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     const userAgent = request.headers['user-agent'] || undefined;
 
     // Create event
-    const event = await prisma.auditEvent.create({
-      data: {
-        companyId: apiKey.companyId,
-        workspaceId: apiKey.workspaceId!,
-        projectId: data.projectId || null,
-        timestamp,
-        category: data.category,
-        action: data.action,
-        actorId: data.actor?.id,
-        actorEmail: data.actor?.email,
-        actorRole: data.actor?.role,
-        resourceType: data.resource?.type,
-        resourceId: data.resource?.id,
-        metadata: data.metadata || {},
-        traceId,
-        ipAddress: ip,
-        userAgent,
-        prevHash,
-        hash,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        idempotencyHash: idempotencyHash as any,
-        dataRegion: apiKey.region,
-      } as any,
-    });
+    let event;
+    try {
+      event = await prisma.auditEvent.create({
+        data: {
+          companyId: apiKey.companyId,
+          workspaceId: apiKey.workspaceId!,
+          projectId: data.projectId || null,
+          timestamp,
+          category: data.category,
+          action: data.action,
+          actorId: data.actor?.id,
+          actorEmail: data.actor?.email,
+          actorRole: data.actor?.role,
+          resourceType: data.resource?.type,
+          resourceId: data.resource?.id,
+          metadata: data.metadata || {},
+          traceId,
+          ipAddress: ip,
+          userAgent,
+          prevHash,
+          hash,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          idempotencyHash: idempotencyHash as any,
+          dataRegion: apiKey.region,
+        } as any,
+      });
+      const logger = (await import('../../lib/logger.js')).getLogger();
+      logger.info({ eventId: event.id, companyId: apiKey.companyId, workspaceId: apiKey.workspaceId, traceId }, 'Event created successfully');
+    } catch (createError: any) {
+      const logger = (await import('../../lib/logger.js')).getLogger();
+      logger.error({ err: createError, traceId, companyId: apiKey.companyId, workspaceId: apiKey.workspaceId }, 'Failed to create event');
+      throw createError; // Re-throw to let error handler deal with it
+    }
 
     // Enqueue webhook jobs (non-blocking)
     enqueueWebhookJobs(
@@ -274,11 +283,17 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     if (query.cursor) {
       try {
         const cursorData = JSON.parse(Buffer.from(query.cursor, 'base64').toString());
-        where.OR = [
-          { timestamp: { lt: new Date(cursorData.timestamp) } },
+        // Add cursor condition to existing where clause (don't replace it)
+        where.AND = [
+          ...(where.AND || []),
           {
-            timestamp: new Date(cursorData.timestamp),
-            id: { lt: cursorData.id },
+            OR: [
+              { timestamp: { lt: new Date(cursorData.timestamp) } },
+              {
+                timestamp: new Date(cursorData.timestamp),
+                id: { lt: cursorData.id },
+              },
+            ],
           },
         ];
       } catch {

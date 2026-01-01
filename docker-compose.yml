@@ -1,93 +1,112 @@
 services:
-    postgres-us:
-        image: postgres:16
-        container_name: hyrelog-postgres-us
-        restart: unless-stopped
-        environment:
-            POSTGRES_USER: hyrelog
-            POSTGRES_PASSWORD: hyrelog
-            POSTGRES_DB: hyrelog_us
-        ports:
-            - '54321:5432'
-        volumes:
-            - postgres_us_data:/var/lib/postgresql/data
-        healthcheck:
-            test: ['CMD-SHELL', 'pg_isready -U hyrelog -d hyrelog_us']
-            interval: 5s
-            timeout: 3s
-            retries: 20
+  postgres-us:
+    image: postgres:16
+    container_name: hyrelog-postgres-us
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hyrelog
+      POSTGRES_PASSWORD: hyrelog
+      POSTGRES_DB: hyrelog_us
+    ports:
+      - '54321:5432'
+    volumes:
+      - postgres_us_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hyrelog -d hyrelog_us']
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-    postgres-eu:
-        image: postgres:16
-        container_name: hyrelog-postgres-eu
-        restart: unless-stopped
-        environment:
-            POSTGRES_USER: hyrelog
-            POSTGRES_PASSWORD: hyrelog
-            POSTGRES_DB: hyrelog_eu
-        ports:
-            - '54322:5432'
-        volumes:
-            - postgres_eu_data:/var/lib/postgresql/data
-        healthcheck:
-            test: ['CMD-SHELL', 'pg_isready -U hyrelog -d hyrelog_eu']
-            interval: 5s
-            timeout: 3s
-            retries: 20
+  postgres-eu:
+    image: postgres:16
+    container_name: hyrelog-postgres-eu
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hyrelog
+      POSTGRES_PASSWORD: hyrelog
+      POSTGRES_DB: hyrelog_eu
+    ports:
+      - '54322:5432'
+    volumes:
+      - postgres_eu_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hyrelog -d hyrelog_eu']
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-    postgres-uk:
-        image: postgres:16
-        container_name: hyrelog-postgres-uk
-        restart: unless-stopped
-        environment:
-            POSTGRES_USER: hyrelog
-            POSTGRES_PASSWORD: hyrelog
-            POSTGRES_DB: hyrelog_uk
-        ports:
-            - '54323:5432'
-        volumes:
-            - postgres_uk_data:/var/lib/postgresql/data
-        healthcheck:
-            test: ['CMD-SHELL', 'pg_isready -U hyrelog -d hyrelog_uk']
-            interval: 5s
-            timeout: 3s
-            retries: 20
+  postgres-uk:
+    image: postgres:16
+    container_name: hyrelog-postgres-uk
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hyrelog
+      POSTGRES_PASSWORD: hyrelog
+      POSTGRES_DB: hyrelog_uk
+    ports:
+      - '54323:5432'
+    volumes:
+      - postgres_uk_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hyrelog -d hyrelog_uk']
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-    postgres-au:
-        image: postgres:16
-        container_name: hyrelog-postgres-au
-        restart: unless-stopped
-        environment:
-            POSTGRES_USER: hyrelog
-            POSTGRES_PASSWORD: hyrelog
-            POSTGRES_DB: hyrelog_au
-        ports:
-            - '54324:5432'
-        volumes:
-            - postgres_au_data:/var/lib/postgresql/data
-        healthcheck:
-            test: ['CMD-SHELL', 'pg_isready -U hyrelog -d hyrelog_au']
-            interval: 5s
-            timeout: 3s
-            retries: 20
+  postgres-au:
+    image: postgres:16
+    container_name: hyrelog-postgres-au
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hyrelog
+      POSTGRES_PASSWORD: hyrelog
+      POSTGRES_DB: hyrelog_au
+    ports:
+      - '54324:5432'
+    volumes:
+      - postgres_au_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hyrelog -d hyrelog_au']
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-    minio:
-        image: minio/minio:latest
-        container_name: hyrelog-minio
-        restart: unless-stopped
-        command: server /data --console-address ":9001"
-        environment:
-            MINIO_ROOT_USER: minioadmin
-            MINIO_ROOT_PASSWORD: minioadmin
-        ports:
-            - '9000:9000' # S3 API
-            - '9001:9001' # MinIO Console UI
-        volumes:
-            - minio_data:/data
+  minio:
+    image: minio/minio:latest
+    container_name: hyrelog-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000' # S3 API
+      - '9001:9001' # MinIO Console UI
+    volumes:
+      - minio_data:/data
+
+  postgres_dashboard:
+    image: postgres:16
+    container_name: hyrelog-postgres-dashboard
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hyrelog
+      POSTGRES_PASSWORD: hyrelog
+      POSTGRES_DB: hyrelog_dashboard
+    ports:
+      - '54325:5432'
+    volumes:
+      - dashboard_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hyrelog -d hyrelog_dashboard']
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
 volumes:
-    postgres_us_data:
-    postgres_eu_data:
-    postgres_uk_data:
-    postgres_au_data:
-    minio_data:
+  postgres_us_data:
+  postgres_eu_data:
+  postgres_uk_data:
+  postgres_au_data:
+  minio_data:
+  dashboard_pg_data:

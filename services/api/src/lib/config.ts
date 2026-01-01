@@ -54,6 +54,9 @@ const ConfigSchema = z.object({
 
   // API Key secret for hashing
   apiKeySecret: z.string().min(1),
+
+  // Dashboard service token (optional - dashboard routes disabled if not set)
+  dashboardServiceToken: z.string().optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -89,6 +92,7 @@ export function loadConfig(): Config {
     rateLimitApiKeyPerMin: process.env.RATE_LIMIT_API_KEY_PER_MIN,
     rateLimitIpPerMin: process.env.RATE_LIMIT_IP_PER_MIN,
     apiKeySecret: process.env.API_KEY_SECRET,
+    dashboardServiceToken: process.env.DASHBOARD_SERVICE_TOKEN,
   };
 
   const result = ConfigSchema.safeParse(raw);

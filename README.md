@@ -32,6 +32,7 @@ docker compose up -d
 
 This starts:
 - 4 Postgres databases (one per region: US, EU, UK, AU)
+- 1 Postgres database for the dashboard auth (hyrelog-dashboard - better-auth)
 - MinIO (S3-compatible storage for local development)
 
 **Verify containers are running:**
@@ -39,11 +40,12 @@ This starts:
 docker ps
 ```
 
-You should see 5 containers:
+You should see 6 containers:
 - `hyrelog-postgres-us` (port 54321)
 - `hyrelog-postgres-eu` (port 54322)
 - `hyrelog-postgres-uk` (port 54323)
 - `hyrelog-postgres-au` (port 54324)
+- `hyrelog-postgres-dashboard` (port 55450) - **Note**: This is for hyrelog-dashboard auth (better-auth) and is separate from the regional databases
 - `hyrelog-minio` (ports 9000, 9001)
 
 ### Step 2: Set Up Environment Variables
@@ -676,13 +678,357 @@ Import the Postman collection from `postman/` directory:
 - `HyreLog API.postman_collection.json` - Updated with Phase 1 endpoints
 - `HyreLog Local.postman_environment.json` - Environment variables
 
-## Next Steps (Phase 2+)
+## Phase 3 - Exports + Retention + Archival
+
+Phase 3 adds streaming exports, retention enforcement, and automated archival to S3.
+
+### Features
+
+- **Streaming Exports**: Export HOT and ARCHIVED data in JSONL or CSV format
+- **Plan-Based Retention**: Automatic marking of events for archival based on plan limits
+- **Automated Archival**: Daily jobs that archive events to S3 as gzipped JSONL files
+- **Archive Verification**: SHA-256 checksum verification of archived files
+- **Cold Storage Marking**: Metadata tracking for cold storage transitions
+- **Plan Enforcement**: All features gated by plan tier (STARTER+ for exports)
+
+### Setup
+
+1. **Ensure S3/MinIO is configured in `.env`**:
+   ```bash
+   S3_ENDPOINT=http://localhost:9000
+   S3_ACCESS_KEY_ID=minioadmin
+   S3_SECRET_ACCESS_KEY=minioadmin
+   S3_REGION=us-east-1
+   S3_FORCE_PATH_STYLE=true
+   S3_BUCKET_US=hyrelog-archive-us
+   S3_BUCKET_EU=hyrelog-archive-eu
+   S3_BUCKET_UK=hyrelog-archive-uk
+   S3_BUCKET_AU=hyrelog-archive-au
+   ```
+
+2. **Create S3 buckets in MinIO** (or let the API create them automatically):
+   - Open MinIO Console: http://localhost:9001
+   - Create buckets: `hyrelog-archive-us`, `hyrelog-archive-eu`, `hyrelog-archive-uk`, `hyrelog-archive-au`
+
+3. **Run migrations**:
+   ```bash
+   npm run prisma:migrate:all
+   npm run prisma:generate
+   ```
+
+4. **Seed with STARTER+ plan** (to test exports):
+   ```bash
+   $env:SEED_PLAN_TIER="STARTER"
+   npm run seed
+   ```
+
+### Testing Exports
+
+1. **Create an export job**:
+   ```bash
+   curl -X POST "http://localhost:3000/v1/exports" \
+     -H "Authorization: Bearer {company_key}" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "source": "HOT",
+       "format": "JSONL",
+       "filters": {
+         "category": "user"
+       },
+       "limit": 100
+     }'
+   ```
+   
+   Response:
+   ```json
+   {
+     "jobId": "export-job-uuid",
+     "status": "PENDING"
+   }
+   ```
+
+2. **Check export job status**:
+   ```bash
+   curl "http://localhost:3000/v1/exports/{job_id}" \
+     -H "Authorization: Bearer {company_key}"
+   ```
+
+3. **Download export**:
+   ```bash
+   curl "http://localhost:3000/v1/exports/{job_id}/download" \
+     -H "Authorization: Bearer {company_key}" \
+     -o export.jsonl
+   ```
+
+### Testing Worker Jobs
+
+**Run a specific job:**
+```bash
+npm run worker retention-marking
+npm run worker archival
+npm run worker archive-verification
+npm run worker cold-archive-marker
+```
+
+**Run all jobs continuously:**
+```bash
+npm run worker
+```
+
+This starts:
+- Webhook worker (continuous polling)
+- Daily jobs (retention, archival, verification) - runs every 24 hours
+- Weekly jobs (cold archive marker) - runs every 7 days
+
+### Export Formats
+
+**JSONL (Newline-Delimited JSON):**
+- One event per line
+- Full event data including metadata
+- Easy to parse line-by-line
+
+**CSV:**
+- Header row with column names
+- Escaped values (quotes doubled)
+- Metadata field is JSON stringified
+
+### Export Sources
+
+- **HOT**: Stream from Postgres (current data)
+- **ARCHIVED**: Stream from S3 (archived data, requires `from`/`to` dates)
+- **HOT_AND_ARCHIVED**: Stream HOT first, then ARCHIVED
+
+### Plan Enforcement
+
+- **Streaming Exports**: STARTER+ plans only
+- **Export Row Limits**: Plan-based (FREE: 10K, STARTER: 250K, GROWTH: 1M, ENTERPRISE: unlimited)
+- **Archive Retention**: Plan-based (STARTER: 180 days, GROWTH: 365 days, ENTERPRISE: 7 years)
+- **Archived Exports**: Requires `archiveRetentionDays` to be set in plan
+
+### Worker Job Details
+
+**Retention Marking (Daily):**
+- Marks events older than `hotRetentionDays` as `archivalCandidate=true`
+- Plan-based: uses `Company.plan.hotRetentionDays` (with `planOverrides` applied)
+- Does NOT delete events
+
+**Archival (Daily):**
+- Processes events with `archivalCandidate=true` and `archived=false`
+- Groups by UTC date (YYYY-MM-DD)
+- Creates gzipped JSONL files
+- Uploads to S3: `archives/{companyId}/{YYYY}/{MM}/{DD}/events.jsonl.gz`
+- Creates `ArchiveObject` records with SHA-256 hash
+- Marks events as `archived=true`
+
+**Archive Verification (Daily):**
+- Processes `ArchiveObject` records where `verifiedAt` is null
+- Downloads and recomputes SHA-256 hash
+- Updates `verifiedAt` on success
+- Records `verificationError` on mismatch
+
+**Cold Archive Marker (Weekly):**
+- Marks `ArchiveObject` records older than `coldArchiveAfterDays`
+- Sets `isColdArchived=true` and `coldArchiveKey`
+- Metadata-only (actual Glacier transition handled by AWS lifecycle rules)
+
+### API Endpoints
+
+- `POST /v1/exports` - Create export job
+- `GET /v1/exports/:jobId` - Get export job status
+- `GET /v1/exports/:jobId/download` - Stream export data
+
+All endpoints require:
+- Company key or Workspace key authentication
+- Plan enforcement (STARTER+ for exports)
+- Rate limiting
+
+### Testing Scripts
+
+Use the provided test scripts:
+
+```powershell
+# Test exports
+.\scripts\test-exports.ps1 -CompanyKey "hlk_co_..." -WorkspaceKey "hlk_ws_..."
+
+# Test worker jobs (info only)
+.\scripts\test-worker-jobs.ps1
+```
+
+### Important Notes
+
+- **Plans are DB-driven**: Uses `Company.plan` + `planOverrides` from database
+- **BigInt handling**: `maxExportRows` uses BigInt throughout (no precision loss)
+- **Streaming**: Exports stream data on-the-fly (no stored files)
+- **Archive retention**: Enforced when exporting ARCHIVED data
+- **Worker scheduling**: Daily/weekly jobs run on a schedule (check every hour)
+
+## Phase 4 - Dashboard Endpoints + Glacier Restore
+
+Phase 4 adds protected dashboard endpoints with service token authentication, audit logging, and Glacier restore workflow support.
+
+### Features
+
+- **Dashboard Authentication**: Service token + actor header validation
+- **Audit Logging**: All dashboard actions logged for compliance
+- **Glacier Restore Workflow**: Customer-initiated, admin-approved restoration requests
+- **Plan-Based Restrictions**: Restore requests gated by plan tier
+- **Export Integration**: Exports fail fast with RESTORE_REQUIRED if cold archived data needs restoration
+
+### Setup
+
+1. **Add DASHBOARD_SERVICE_TOKEN to `.env`**:
+   ```bash
+   DASHBOARD_SERVICE_TOKEN=your-secure-token-here
+   ```
+   Generate a secure token: `openssl rand -hex 32`
+
+2. **Run migrations**:
+   ```bash
+   npm run prisma:migrate:all
+   npm run prisma:generate
+   ```
+
+3. **Start the API server**:
+   ```bash
+   npm run dev
+   ```
+
+### Dashboard Authentication
+
+All `/dashboard/*` endpoints require:
+
+**Required Headers:**
+- `x-dashboard-token`: Must match `DASHBOARD_SERVICE_TOKEN` env var
+- `x-user-id`: User ID from dashboard
+- `x-user-email`: User email
+- `x-user-role`: User role (e.g., "ADMIN", "MEMBER", "HYRELOG_ADMIN")
+
+**Company-Scoped Routes (also require):**
+- `x-company-id`: Company ID for the request
+
+**Admin Routes:**
+- Require `x-user-role: HYRELOG_ADMIN`
+
+### Testing Dashboard Endpoints
+
+**Example: Get company info**
+```bash
+curl -X GET "http://localhost:3000/dashboard/company" \
+  -H "x-dashboard-token: your-token" \
+  -H "x-user-id: user-123" \
+  -H "x-user-email: user@example.com" \
+  -H "x-user-role: ADMIN" \
+  -H "x-company-id: company-uuid"
+```
+
+**Example: Create restore request**
+```bash
+curl -X POST "http://localhost:3000/dashboard/restore-requests" \
+  -H "x-dashboard-token: your-token" \
+  -H "x-user-id: user-123" \
+  -H "x-user-email: user@example.com" \
+  -H "x-user-role: ADMIN" \
+  -H "x-company-id: company-uuid" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "archiveId": "archive-uuid",
+    "tier": "STANDARD",
+    "days": 7
+  }'
+```
+
+**Example: Admin approve restore request**
+```bash
+curl -X POST "http://localhost:3000/dashboard/admin/restore-requests/{id}/approve" \
+  -H "x-dashboard-token: your-token" \
+  -H "x-user-id: admin-user" \
+  -H "x-user-email: admin@hyrelog.com" \
+  -H "x-user-role: HYRELOG_ADMIN"
+```
+
+### Glacier Restore Workflow
+
+1. **Customer creates restore request** → Status: `PENDING`
+2. **Admin approves** → Status: `APPROVED`
+3. **Worker initiates restore** (every 5 min) → Status: `INITIATING` → `IN_PROGRESS`
+4. **Worker checks status** (every 15 min) → Status: `COMPLETED` when ready
+5. **ArchiveObject updated**: `isColdArchived=false`, `restoredUntil` set
+6. **After expiration** (daily job) → Status: `EXPIRED`, `isColdArchived=true` again
+
+### Plan Restrictions
+
+- **FREE/STARTER**: Restore requests not allowed
+- **GROWTH**: Only STANDARD and BULK tiers allowed
+- **ENTERPRISE**: All tiers (EXPEDITED, STANDARD, BULK) allowed
+
+### Local Development (MinIO)
+
+In development mode (when `S3_ENDPOINT` is set), restore operations are simulated:
+- Restore requests complete after ~2 minutes
+- No actual AWS Glacier operations
+- Cost estimates are still calculated
+
+### Worker Jobs
+
+**Restore Initiator** (runs every 5 minutes):
+```bash
+npm run worker restore-initiator
+```
+
+**Restore Status Checker** (runs every 15 minutes):
+```bash
+npm run worker restore-status-checker
+```
+
+**Restore Expiration** (runs daily):
+```bash
+npm run worker restore-expiration
+```
+
+### Export Integration
+
+When exporting `ARCHIVED` or `HOT_AND_ARCHIVED` data:
+- If any ArchiveObject is cold archived and not currently restored → Returns `RESTORE_REQUIRED` error
+- Includes `archiveIds` array in error response
+- Export fails fast before processing begins
+
+### API Endpoints
+
+**Company-Scoped:**
+- `GET /dashboard/company` - Get company summary
+- `GET /dashboard/events` - Query events (company-scoped)
+- `POST /dashboard/exports` - Create export
+- `GET /dashboard/exports/:jobId` - Get export status
+- `GET /dashboard/exports/:jobId/download` - Download export
+- `GET /dashboard/webhooks` - List webhooks
+- `POST /dashboard/webhooks` - Create webhook
+- `POST /dashboard/webhooks/:id/enable` - Enable webhook
+- `POST /dashboard/webhooks/:id/disable` - Disable webhook
+- `GET /dashboard/webhooks/:id/deliveries` - Get webhook deliveries
+- `POST /dashboard/restore-requests` - Create restore request
+- `GET /dashboard/restore-requests` - List restore requests
+- `GET /dashboard/restore-requests/:id` - Get restore request
+- `DELETE /dashboard/restore-requests/:id` - Cancel restore request (PENDING only)
+
+**Admin-Only:**
+- `GET /dashboard/admin/companies` - List/search companies
+- `GET /dashboard/admin/plans` - List plans
+- `POST /dashboard/admin/companies/:id/plan` - Assign plan
+- `GET /dashboard/admin/restore-requests` - List all restore requests
+- `POST /dashboard/admin/restore-requests/:id/approve` - Approve restore
+- `POST /dashboard/admin/restore-requests/:id/reject` - Reject restore
+- `POST /dashboard/admin/restore-requests/:id/cancel` - Cancel restore
+- `GET /dashboard/admin/audit-logs` - Get audit logs
+
+All endpoints require dashboard authentication and log actions to `AuditLog` table.
+
+## Next Steps (Phase 5+)
 
 Future phases will implement:
-- Real archival processing
 - GDPR anonymization workflow
-- Webhook delivery system
-- Streaming exports
+- SSE tail (real-time event streaming)
+- SIEM integrations
+- PDF reports
 - ECS Fargate service definitions
 - CI/CD pipelines
 

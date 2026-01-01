@@ -108,7 +108,7 @@ async function seed() {
         webhooksEnabled: false,
         maxWebhooks: 0,
         streamingExportsEnabled: false,
-        maxExportRows: 10000,
+        maxExportRows: BigInt(10000), // Use BigInt consistently
         hotRetentionDays: 7,
         allowCustomCategories: false,
         isDefault: true, // Default plan for new companies
@@ -125,7 +125,7 @@ async function seed() {
         webhooksEnabled: false,
         maxWebhooks: 0,
         streamingExportsEnabled: true,
-        maxExportRows: 250000,
+        maxExportRows: BigInt(250000), // Use BigInt consistently
         hotRetentionDays: 30,
         archiveRetentionDays: 180,
         allowCustomCategories: true,
@@ -142,7 +142,7 @@ async function seed() {
         webhooksEnabled: true,
         maxWebhooks: 3,
         streamingExportsEnabled: true,
-        maxExportRows: 1000000,
+        maxExportRows: BigInt(1000000), // Use BigInt consistently
         hotRetentionDays: 90,
         archiveRetentionDays: 365,
         coldArchiveAfterDays: 365,
@@ -160,7 +160,7 @@ async function seed() {
         webhooksEnabled: true,
         maxWebhooks: 20,
         streamingExportsEnabled: true,
-        maxExportRows: BigInt('999999999999'), // Effectively unlimited
+        maxExportRows: BigInt('999999999999'), // Effectively unlimited, safe as BigInt
         hotRetentionDays: 180,
         archiveRetentionDays: 2555, // ~7 years
         coldArchiveAfterDays: 365,

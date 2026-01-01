@@ -92,6 +92,42 @@ enum WebhookDeliveryStatus {
   RETRY_SCHEDULED
 }
 
+enum ExportFormat {
+  JSONL
+  CSV
+}
+
+enum ExportStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+enum ExportSource {
+  HOT
+  ARCHIVED
+  HOT_AND_ARCHIVED
+}
+
+enum GlacierRestoreStatus {
+  PENDING
+  APPROVED
+  INITIATING
+  IN_PROGRESS
+  COMPLETED
+  EXPIRED
+  FAILED
+  CANCELLED
+}
+
+enum GlacierRestoreTier {
+  EXPEDITED
+  STANDARD
+  BULK
+}
+
 // ============================================================
 // Plan Management (Database-Driven)
 // ============================================================
@@ -152,21 +188,24 @@ model Company {
 
   createdAt DateTime @default(now())
 
-    // Relations
-    plan            Plan              @relation(fields: [planId], references: [id], onDelete: Restrict)
-    members         CompanyMember[]
-    workspaces      Workspace[]
-    apiKeys         ApiKey[]
-    auditEvents     AuditEvent[]
-    archiveObjects  ArchiveObject[]
-    gdprRequests    GdprRequest[]
-    webhookEndpoints WebhookEndpoint[]
+  // Relations
+  plan            Plan              @relation(fields: [planId], references: [id], onDelete: Restrict)
+  members         CompanyMember[]
+  workspaces      Workspace[]
+  apiKeys         ApiKey[]
+  auditEvents     AuditEvent[]
+  archiveObjects  ArchiveObject[]
+  gdprRequests    GdprRequest[]
+  webhookEndpoints WebhookEndpoint[]
+  exportJobs      ExportJob[]
+  auditLogs       AuditLog[]
+  restoreRequests GlacierRestoreRequest[]
 
-    @@index([dataRegion])
-    @@index([planTier]) // DEPRECATED: Keep for backward compatibility
-    @@index([planId])
-    @@map("companies")
-  }
+  @@index([dataRegion])
+  @@index([planTier]) // DEPRECATED: Keep for backward compatibility
+  @@index([planId])
+  @@map("companies")
+}
 
 model CompanyMember {
   id        String            @id @default(uuid())
@@ -200,6 +239,7 @@ model Workspace {
   auditEvents      AuditEvent[]
   archiveObjects   ArchiveObject[]
   webhookEndpoints WebhookEndpoint[]
+  exportJobs       ExportJob[]
 
   @@index([companyId])
   @@map("workspaces")
@@ -215,6 +255,7 @@ model Project {
   workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   auditEvents      AuditEvent[]
   webhookEndpoints WebhookEndpoint[]
+  exportJobs       ExportJob[]
 
   @@index([workspaceId])
   @@map("projects")
@@ -368,22 +409,100 @@ model ArchiveObject {
   s3Key       String // Full S3 key path
   gzSizeBytes Int // Size of gzipped file in bytes
   sha256      String // SHA-256 hash of the archive file
+  rowCount    Int? // Number of events in archive
+
+  // Verification
+  verifiedAt DateTime? // When archive was verified
+  verificationError String? // Error message if verification failed
 
   // Cold storage
   isColdArchived Boolean @default(false)
   coldArchiveKey String? // Glacier/Deep Archive key
+  restoredUntil DateTime? // When restore expires (null if not restored or expired)
 
   createdAt DateTime @default(now())
 
   // Relations
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  restoreRequests GlacierRestoreRequest[]
 
   @@unique([companyId, workspaceId, region, date])
   @@index([companyId])
   @@index([region, date])
   @@index([isColdArchived])
+  @@index([verifiedAt])
+  @@index([restoredUntil])
   @@map("archive_objects")
+}
+
+// ============================================================
+// Export Jobs
+// ============================================================
+
+model ExportJob {
+  id String @id @default(uuid())
+
+  // Scope
+  companyId   String
+  workspaceId String?
+  projectId   String?
+
+  // Request metadata
+  requestedByType String // "API_KEY" for now; later "DASHBOARD_USER"
+  requestedById   String? // apiKeyId or memberId later
+
+  // Export configuration
+  source ExportSource
+  format ExportFormat
+  status ExportStatus @default(PENDING)
+  filters Json? // Export filters (from, to, category, action, etc.)
+
+  // Progress tracking
+  rowLimit    BigInt // Maximum rows to export (from plan limit)
+  rowsExported BigInt @default(0) // Actual rows exported
+
+  // Result metadata
+  fileS3Key String? // Optional manifest key (not required for streaming)
+
+  // Error tracking
+  errorCode    String?
+  errorMessage String?
+
+  // Timestamps
+  createdAt  DateTime @default(now())
+  startedAt DateTime?
+  finishedAt DateTime?
+
+  // Relations
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  workspace Workspace?      @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  project   Project?        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  chunks    ExportJobChunk[]
+
+  @@index([companyId, status, createdAt])
+  @@index([status])
+  @@index([companyId])
+  @@map("export_jobs")
+}
+
+model ExportJobChunk {
+  id String @id @default(uuid())
+  exportJobId String
+
+  // Chunk metadata
+  partNumber Int // Sequential part number
+  s3Key      String? // S3 key if stored
+  sha256     String? // SHA-256 hash of chunk
+  rows       BigInt @default(0) // Number of rows in this chunk
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  exportJob ExportJob @relation(fields: [exportJobId], references: [id], onDelete: Cascade)
+
+  @@index([exportJobId])
+  @@map("export_job_chunks")
 }
 
 // ============================================================
@@ -542,4 +661,101 @@ model WebhookDeliveryAttempt {
   @@index([eventId])
   @@index([status])
   @@map("webhook_delivery_attempts")
+}
+
+// ============================================================
+// Dashboard Audit Logs (Phase 4)
+// ============================================================
+
+model AuditLog {
+  id String @id @default(uuid())
+  
+  // Action details
+  action String // e.g., "RESTORE_REQUEST_CREATED", "WEBHOOK_ENABLED", "EXPORT_REQUESTED"
+  
+  // Actor information (from dashboard headers)
+  actorUserId  String
+  actorEmail   String
+  actorRole    String
+  
+  // Target company (if company-scoped action)
+  targetCompanyId String?
+  
+  // Request context
+  ip       String?
+  userAgent String?
+  traceId  String?
+  
+  // Flexible metadata (JSON)
+  metadata Json?
+  
+  createdAt DateTime @default(now())
+  
+  // Relations
+  company Company? @relation(fields: [targetCompanyId], references: [id], onDelete: SetNull)
+  
+  @@index([targetCompanyId])
+  @@index([actorUserId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// Glacier Restore Requests (Phase 4)
+// ============================================================
+
+model GlacierRestoreRequest {
+  id String @id @default(uuid())
+  
+  // Scope
+  companyId String
+  region    Region
+  archiveId String // References ArchiveObject
+  
+  // Request details
+  requestedByType String // "DASHBOARD_USER" or "API_KEY"
+  requestedById   String // userId or apiKeyId
+  requestedAt      DateTime @default(now())
+  
+  // Restore configuration
+  tier GlacierRestoreTier
+  days Int? // Days to keep restored (default based on tier)
+  
+  // Status workflow
+  status GlacierRestoreStatus @default(PENDING)
+  
+  // AWS S3 restore tracking
+  s3RestoreId String? // AWS restore request ID
+  
+  // Approval workflow
+  initiatedAt DateTime?
+  initiatedBy String? // userId or "SYSTEM"
+  approvedAt  DateTime?
+  approvedBy  String? // userId (HYRELOG_ADMIN)
+  rejectedAt DateTime?
+  rejectedBy String? // userId (HYRELOG_ADMIN)
+  rejectReason String?
+  
+  // Completion
+  completedAt DateTime?
+  expiresAt   DateTime? // When restore expires (days after completion)
+  errorMessage String?
+  
+  // Cost tracking
+  estimatedCostUsd Decimal? @db.Decimal(10, 4)
+  actualCostUsd    Decimal? @db.Decimal(10, 4)
+  
+  // Cancellation
+  cancelledAt DateTime?
+  cancelledBy String?
+  
+  // Relations
+  company  Company       @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  archive  ArchiveObject @relation(fields: [archiveId], references: [id], onDelete: Restrict)
+  
+  @@index([companyId, status])
+  @@index([archiveId])
+  @@index([status, requestedAt])
+  @@map("glacier_restore_requests")
 }

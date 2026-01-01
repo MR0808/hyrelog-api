@@ -2,7 +2,7 @@
 	"info": {
 		"_postman_id": "hyrelog-api-collection",
 		"name": "HyreLog API",
-		"description": "HyreLog API - Phase 2.x Collection\n\nCore API MVP with event ingestion, querying, key management, and webhooks.\n\n**Setup:**\n1. Run `npm run seed` (optionally with SEED_PLAN_TIER=GROWTH for webhooks)\n2. Copy the API keys and IDs from seed output\n3. Set them in the Postman environment variables\n4. For webhook testing: start webhook receiver (`node tools/webhook-receiver.js`)",
+		"description": "HyreLog API - Phase 3 Collection\n\nCore API MVP with event ingestion, querying, key management, webhooks, and exports.\n\n**Setup:**\n1. Run `npm run seed` (optionally with SEED_PLAN_TIER=STARTER for exports, GROWTH for webhooks)\n2. Copy the API keys and IDs from seed output\n3. Set them in the Postman environment variables\n4. For webhook testing: start webhook receiver (`node tools/webhook-receiver.js`)\n5. For export testing: ensure STARTER+ plan (FREE plan will be rejected)",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"item": [
@@ -514,6 +514,270 @@
 							"response": []
 						}
 					]
+				},
+				{
+					"name": "Exports",
+					"item": [
+						{
+							"name": "Create Export (HOT - JSONL)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"source\": \"HOT\",\n  \"format\": \"JSONL\",\n  \"filters\": {\n    \"category\": \"user\"\n  },\n  \"limit\": 100\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/v1/exports",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"exports"
+									]
+								},
+								"description": "Create an export job for HOT data in JSONL format.\n\n**Plan Requirements:**\n- Requires STARTER plan or higher\n- Export limit enforced: FREE=10K, STARTER=250K, GROWTH=1M, ENTERPRISE=unlimited\n\n**Response:** Returns `jobId` - save this for status check and download.\n\n**Note:** Use Tests tab to auto-extract `jobId` to `export_job_id` environment variable."
+							},
+							"response": [],
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"if (pm.response.code === 201) {",
+											"    const response = pm.response.json();",
+											"    if (response.jobId) {",
+											"        pm.environment.set('export_job_id', response.jobId);",
+											"        console.log('Export job ID saved:', response.jobId);",
+											"    }",
+											"}"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "Create Export (HOT - CSV)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"source\": \"HOT\",\n  \"format\": \"CSV\",\n  \"limit\": 50\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/v1/exports",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"exports"
+									]
+								},
+								"description": "Create an export job for HOT data in CSV format.\n\n**Plan Requirements:**\n- Requires STARTER plan or higher\n\n**Response:** Returns `jobId` - save this for status check and download."
+							},
+							"response": [],
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"if (pm.response.code === 201) {",
+											"    const response = pm.response.json();",
+											"    if (response.jobId) {",
+											"        pm.environment.set('export_job_id', response.jobId);",
+											"        console.log('Export job ID saved:', response.jobId);",
+											"    }",
+											"}"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "Create Export (ARCHIVED)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"source\": \"ARCHIVED\",\n  \"format\": \"JSONL\",\n  \"filters\": {\n    \"from\": \"2024-01-01T00:00:00Z\",\n    \"to\": \"2024-01-31T23:59:59Z\",\n    \"category\": \"user\"\n  }\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/v1/exports",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"exports"
+									]
+								},
+								"description": "Create an export job for ARCHIVED data.\n\n**Requirements:**\n- Requires STARTER plan or higher\n- `from` and `to` dates are REQUIRED for ARCHIVED exports\n- Archive retention enforced (data older than `archiveRetentionDays` not available)\n- Category/action filtering is best-effort (applied after download)\n\n**Note:** Ensure you have archived data first (run worker archival job)."
+							},
+							"response": [],
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"if (pm.response.code === 201) {",
+											"    const response = pm.response.json();",
+											"    if (response.jobId) {",
+											"        pm.environment.set('export_job_id', response.jobId);",
+											"        console.log('Export job ID saved:', response.jobId);",
+											"    }",
+											"}"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "Create Export (HOT_AND_ARCHIVED)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"source\": \"HOT_AND_ARCHIVED\",\n  \"format\": \"JSONL\",\n  \"filters\": {\n    \"from\": \"2024-01-01T00:00:00Z\",\n    \"to\": \"2024-01-31T23:59:59Z\"\n  }\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/v1/exports",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"exports"
+									]
+								},
+								"description": "Create an export job combining HOT and ARCHIVED data.\n\n**Requirements:**\n- Requires STARTER plan or higher\n- `from` and `to` dates are REQUIRED\n- Streams HOT data first, then ARCHIVED data\n\n**Note:** This is useful for getting a complete export across both current and archived data."
+							},
+							"response": [],
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"if (pm.response.code === 201) {",
+											"    const response = pm.response.json();",
+											"    if (response.jobId) {",
+											"        pm.environment.set('export_job_id', response.jobId);",
+											"        console.log('Export job ID saved:', response.jobId);",
+											"    }",
+											"}"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "Get Export Status",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text",
+										"description": "Can use company_key or workspace_key"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/exports/{{export_job_id}}",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"exports",
+										"{{export_job_id}}"
+									]
+								},
+								"description": "Get export job status and metadata.\n\n**Status Values:**\n- `PENDING`: Job created, not started\n- `RUNNING`: Currently streaming\n- `SUCCEEDED`: Export completed successfully\n- `FAILED`: Export failed (check `errorCode` and `errorMessage`)\n- `CANCELED`: Job was canceled\n\n**Response includes:**\n- Status, source, format\n- Row limit and rows exported\n- Timestamps (created, started, finished)\n- Error details (if failed)"
+							},
+							"response": []
+						},
+						{
+							"name": "Download Export",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{company_key}}",
+										"type": "text"
+									}
+								],
+								"url": {
+									"raw": "{{base_url}}/v1/exports/{{export_job_id}}/download",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"v1",
+										"exports",
+										"{{export_job_id}}",
+										"download"
+									]
+								},
+								"description": "Stream and download export data.\n\n**How it works:**\n- Streams data on-the-fly (no pre-generated files)\n- Updates job status to `RUNNING` when started\n- Updates to `SUCCEEDED` when complete, or `FAILED` on error\n- Response is the actual export file (JSONL or CSV)\n\n**In Postman:**\n- Click \"Send and Download\" to save the file\n- Or use \"Send\" to view in response body\n\n**Note:** Large exports may take time to stream. Check job status separately if needed."
+							},
+							"response": []
+						}
+					],
+					"description": "Phase 3: Export endpoints for streaming HOT and ARCHIVED data.\n\n**Plan Requirements:**\n- STARTER+ plan required for exports\n- Export limits enforced per plan tier\n\n**Export Sources:**\n- `HOT`: Current data from Postgres\n- `ARCHIVED`: Archived data from S3 (requires from/to dates)\n- `HOT_AND_ARCHIVED`: Combines both sources\n\n**Export Formats:**\n- `JSONL`: Newline-delimited JSON (one event per line)\n- `CSV`: Comma-separated values with header row"
 				}
 			],
 			"description": "V1 API endpoints"

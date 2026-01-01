@@ -18,12 +18,14 @@ export type { PlanTier };
 /**
  * Plan configuration interface
  * Defines features and limits for each plan tier
+ * 
+ * Note: maxExportRows is bigint to support values exceeding Number.MAX_SAFE_INTEGER
  */
 export interface PlanConfig {
   webhooksEnabled: boolean;
   maxWebhooks: number;
   streamingExportsEnabled: boolean;
-  maxExportRows: number;
+  maxExportRows: bigint; // BigInt to support large values
   hotRetentionDays: number;
   archiveRetentionDays?: number;
   coldArchiveAfterDays?: number;
@@ -38,7 +40,7 @@ const PLAN_CONFIGS: Record<PlanTier, PlanConfig> = {
     webhooksEnabled: false,
     maxWebhooks: 0,
     streamingExportsEnabled: false,
-    maxExportRows: 10_000,
+    maxExportRows: BigInt(10_000),
     hotRetentionDays: 7,
     allowCustomCategories: false,
   },
@@ -46,7 +48,7 @@ const PLAN_CONFIGS: Record<PlanTier, PlanConfig> = {
     webhooksEnabled: false,
     maxWebhooks: 0,
     streamingExportsEnabled: true, // Active data only (Phase 3)
-    maxExportRows: 250_000,
+    maxExportRows: BigInt(250_000),
     hotRetentionDays: 30,
     archiveRetentionDays: 180,
     allowCustomCategories: true,
@@ -55,7 +57,7 @@ const PLAN_CONFIGS: Record<PlanTier, PlanConfig> = {
     webhooksEnabled: true,
     maxWebhooks: 3,
     streamingExportsEnabled: true,
-    maxExportRows: 1_000_000,
+    maxExportRows: BigInt(1_000_000),
     hotRetentionDays: 90,
     archiveRetentionDays: 365,
     coldArchiveAfterDays: 365,
@@ -65,7 +67,7 @@ const PLAN_CONFIGS: Record<PlanTier, PlanConfig> = {
     webhooksEnabled: true,
     maxWebhooks: 20,
     streamingExportsEnabled: true,
-    maxExportRows: Number.MAX_SAFE_INTEGER, // Effectively unlimited
+    maxExportRows: BigInt('999999999999'), // Effectively unlimited, safe as BigInt
     hotRetentionDays: 180,
     archiveRetentionDays: 2555, // ~7 years
     coldArchiveAfterDays: 365, // Configurable via planOverrides
@@ -76,6 +78,8 @@ const PLAN_CONFIGS: Record<PlanTier, PlanConfig> = {
 /**
  * Get plan configuration for a plan tier
  * Optionally merges with planOverrides from Company model
+ * 
+ * Note: Converts maxExportRows from database BigInt or JSON number/string to BigInt
  */
 export function getPlanConfig(planTier: PlanTier, planOverrides?: any): PlanConfig {
   const baseConfig = PLAN_CONFIGS[planTier];
@@ -86,10 +90,24 @@ export function getPlanConfig(planTier: PlanTier, planOverrides?: any): PlanConf
   }
   
   // Merge base config with overrides (shallow merge)
-  return {
+  const merged = {
     ...baseConfig,
     ...planOverrides,
   };
+  
+  // Ensure maxExportRows is always BigInt (handles JSON number/string from planOverrides)
+  if ('maxExportRows' in merged) {
+    if (typeof merged.maxExportRows === 'bigint') {
+      // Already BigInt, keep as is
+    } else if (typeof merged.maxExportRows === 'string') {
+      merged.maxExportRows = BigInt(merged.maxExportRows);
+    } else if (typeof merged.maxExportRows === 'number') {
+      merged.maxExportRows = BigInt(merged.maxExportRows);
+    }
+    // If it's already the correct type, leave it
+  }
+  
+  return merged;
 }
 
 /**
@@ -119,10 +137,27 @@ export function companyHasFeature(company: Pick<Company, 'planTier' | 'planOverr
 
 /**
  * Get a limit value for a plan tier
+ * Returns bigint for maxExportRows, number for other limits
  */
-export function getLimit(planTier: PlanTier, limitName: keyof PlanConfig, planOverrides?: any): number {
+export function getLimit(planTier: PlanTier, limitName: keyof PlanConfig, planOverrides?: any): number | bigint {
   const config = getPlanConfig(planTier, planOverrides);
   const value = config[limitName];
+  
+  // maxExportRows is bigint, others are number
+  if (limitName === 'maxExportRows') {
+    if (typeof value === 'bigint') {
+      return value;
+    }
+    // Handle case where value might come from JSON (planOverrides) as string or number
+    if (typeof value === 'string') {
+      return BigInt(value);
+    }
+    if (typeof value === 'number') {
+      return BigInt(value);
+    }
+    throw new Error(`Limit ${limitName} is not a valid bigint for plan ${planTier}`);
+  }
+  
   if (typeof value !== 'number') {
     throw new Error(`Limit ${limitName} is not a number for plan ${planTier}`);
   }
@@ -132,8 +167,9 @@ export function getLimit(planTier: PlanTier, limitName: keyof PlanConfig, planOv
 /**
  * Get a limit value from a Company object
  * Automatically applies planOverrides if present
+ * Returns bigint for maxExportRows, number for other limits
  */
-export function getCompanyLimit(company: Pick<Company, 'planTier' | 'planOverrides'>, limitName: keyof PlanConfig): number {
+export function getCompanyLimit(company: Pick<Company, 'planTier' | 'planOverrides'>, limitName: keyof PlanConfig): number | bigint {
   return getLimit(company.planTier, limitName, company.planOverrides as any);
 }
 
@@ -183,21 +219,43 @@ export function requireCompanyFeature(company: Pick<Company, 'planTier' | 'planO
 export function requireLimit(
   planTier: PlanTier,
   limitName: keyof PlanConfig,
-  currentValue: number,
+  currentValue: number | bigint,
   requiredPlan?: PlanTier,
   planOverrides?: any
 ): void {
   const limit = getLimit(planTier, limitName, planOverrides);
+  
+  // Handle bigint comparison for maxExportRows
+  if (limitName === 'maxExportRows') {
+    const limitBigInt = typeof limit === 'bigint' ? limit : BigInt(limit);
+    const currentBigInt = typeof currentValue === 'bigint' ? currentValue : BigInt(currentValue);
+    
+    // Use > instead of >= to allow creating up to the limit
+    if (currentBigInt > limitBigInt) {
+      const requiredPlanMsg = requiredPlan
+        ? ` Requires ${requiredPlan} plan or higher.`
+        : '';
+      throw new PlanRestrictionError(
+        planTier,
+        `${limitName} limit exceeded (${currentBigInt}/${limitBigInt})`,
+        requiredPlan
+      );
+    }
+    return;
+  }
+  
+  // Handle number comparison for other limits
+  const limitNum = typeof limit === 'number' ? limit : Number(limit);
+  const currentNum = typeof currentValue === 'number' ? currentValue : Number(currentValue);
+  
   // Use > instead of >= to allow creating up to the limit
-  // e.g., if limit is 3, allow creating when currentValue is 0, 1, or 2
-  // but block when currentValue would be 3 or more
-  if (currentValue > limit) {
+  if (currentNum > limitNum) {
     const requiredPlanMsg = requiredPlan
       ? ` Requires ${requiredPlan} plan or higher.`
       : '';
     throw new PlanRestrictionError(
       planTier,
-      `${limitName} limit exceeded (${currentValue}/${limit})`,
+      `${limitName} limit exceeded (${currentNum}/${limitNum})`,
       requiredPlan
     );
   }
@@ -206,16 +264,40 @@ export function requireLimit(
 /**
  * Require a limit from a Company object
  * Automatically applies planOverrides if present
+ * Handles both number and bigint limits (for maxExportRows)
  */
-export function requireCompanyLimit(company: Pick<Company, 'planTier' | 'planOverrides'>, limitName: keyof PlanConfig, currentValue: number, requiredPlan?: PlanTier): void {
+export function requireCompanyLimit(company: Pick<Company, 'planTier' | 'planOverrides'>, limitName: keyof PlanConfig, currentValue: number | bigint, requiredPlan?: PlanTier): void {
   const limit = getCompanyLimit(company, limitName);
-  if (currentValue > limit) {
+  
+  // Handle bigint comparison for maxExportRows
+  if (limitName === 'maxExportRows') {
+    const limitBigInt = typeof limit === 'bigint' ? limit : BigInt(limit);
+    const currentBigInt = typeof currentValue === 'bigint' ? currentValue : BigInt(currentValue);
+    
+    if (currentBigInt > limitBigInt) {
+      const requiredPlanMsg = requiredPlan
+        ? ` Requires ${requiredPlan} plan or higher.`
+        : '';
+      throw new PlanRestrictionError(
+        company.planTier,
+        `${limitName} limit exceeded (${currentBigInt}/${limitBigInt})`,
+        requiredPlan
+      );
+    }
+    return;
+  }
+  
+  // Handle number comparison for other limits
+  const limitNum = typeof limit === 'number' ? limit : Number(limit);
+  const currentNum = typeof currentValue === 'number' ? currentValue : Number(currentValue);
+  
+  if (currentNum > limitNum) {
     const requiredPlanMsg = requiredPlan
       ? ` Requires ${requiredPlan} plan or higher.`
       : '';
     throw new PlanRestrictionError(
       company.planTier,
-      `${limitName} limit exceeded (${currentValue}/${limit})`,
+      `${limitName} limit exceeded (${currentNum}/${limitNum})`,
       requiredPlan
     );
   }

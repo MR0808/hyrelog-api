@@ -4,7 +4,7 @@ This directory contains Postman collections and environments for testing the Hyr
 
 ## Files
 
-- `HyreLog API.postman_collection.json` - Postman collection with all API endpoints (Phase 2.x)
+- `HyreLog API.postman_collection.json` - Postman collection with all API endpoints (Phase 3)
 - `HyreLog Local.postman_environment.json` - Local development environment variables
 - `ENVIRONMENT_SETUP.md` - Detailed guide on where to get each environment variable value
 
@@ -64,6 +64,12 @@ In Postman, edit the **HyreLog Local** environment and set:
 - **Save it immediately** - you won't be able to retrieve it again
 - Use for: Verifying webhook signatures in your webhook receiver
 
+**`export_job_id`** - Export Job ID (for export operations):
+- ⚠️ **AUTO-EXTRACTED:** Automatically saved from "Create Export" responses via Postman Tests
+- Get it from: `V1 API > Exports > Create Export` response (the `jobId` field)
+- Or manually: Copy from any "Create Export" response
+- Use for: Checking export status and downloading exports
+
 **Note:** The seed script clears all existing data and creates fresh test data each time you run it.
 
 ## Available Endpoints
@@ -92,6 +98,11 @@ In Postman, edit the **HyreLog Local** environment and set:
 - `POST /v1/webhooks/:webhookId/disable` - Disable webhook
 - `POST /v1/webhooks/:webhookId/enable` - Enable webhook
 - `GET /v1/webhooks/:webhookId/deliveries` - Get delivery attempts
+
+#### Exports (Starter+ plans only)
+- `POST /v1/exports` - Create export job (HOT, ARCHIVED, or HOT_AND_ARCHIVED)
+- `GET /v1/exports/:jobId` - Get export job status
+- `GET /v1/exports/:jobId/download` - Stream and download export data
 
 ## Testing Workflow
 
@@ -142,9 +153,34 @@ See `ENVIRONMENT_SETUP.md` for detailed instructions on where to get:
 - `webhook_id` - From Create Webhook or List Webhooks response
 - `webhook_secret` - From Create Webhook response (⚠️ shown only once!)
 
+## Phase 3 Updates
+
+**New Export Endpoints:**
+- Create Export (HOT - JSONL) - Stream current data in JSONL format
+- Create Export (HOT - CSV) - Stream current data in CSV format
+- Create Export (ARCHIVED) - Stream archived data (requires from/to dates)
+- Create Export (HOT_AND_ARCHIVED) - Stream both current and archived data
+- Get Export Status - Check export job status and progress
+- Download Export - Stream and download export file
+
+**Auto-Extraction:**
+- `export_job_id` is automatically extracted from "Create Export" responses
+- No manual copying needed - just use `{{export_job_id}}` in subsequent requests
+
+**Plan Requirements:**
+- Exports require STARTER+ plan
+- FREE plan will return `PLAN_RESTRICTED` error
+- Export limits enforced: FREE=10K, STARTER=250K, GROWTH=1M, ENTERPRISE=unlimited
+
+**Testing Exports:**
+1. Ensure STARTER+ plan: `$env:SEED_PLAN_TIER="STARTER"; npm run seed`
+2. Create export: Use any "Create Export" request
+3. Check status: "Get Export Status" (uses auto-extracted `export_job_id`)
+4. Download: "Download Export" → Use "Send and Download" to save file
+
 ## Updating the Collection
 
-As new endpoints are added in future phases, this collection will be updated to include:
-- Streaming export endpoints
-- Additional filtering options
-- Error scenario tests
+The collection is updated with each phase:
+- ✅ Phase 1: Events, Keys
+- ✅ Phase 2: Webhooks
+- ✅ Phase 3: Exports

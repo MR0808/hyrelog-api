@@ -6,9 +6,11 @@ import { errorHandlerPlugin } from './plugins/errorHandler.js';
 import { internalAuthPlugin } from './plugins/internalAuth.js';
 import { rateLimitPlugin } from './plugins/rateLimit.js';
 import { setupAuthHook } from './plugins/auth.js';
+import { dashboardAuthPlugin } from './plugins/dashboardAuth.js';
 import { healthRoutes } from './routes/internal/health.js';
 import { metricsRoutes } from './routes/internal/metrics.js';
 import { v1Routes } from './routes/v1/index.js';
+import { dashboardRoutes } from './routes/dashboard/index.js';
 
 async function buildServer() {
   const logger = getLogger();
@@ -33,6 +35,9 @@ async function buildServer() {
   // Setup auth hook directly on server (before routes)
   setupAuthHook(server);
   
+  // Register dashboard auth plugin (for /dashboard routes)
+  await server.register(dashboardAuthPlugin);
+  
   // Note: rateLimitPlugin should run AFTER auth so it can access request.apiKey
   await server.register(rateLimitPlugin);
 
@@ -40,6 +45,7 @@ async function buildServer() {
   await server.register(healthRoutes, { prefix: '/internal' });
   await server.register(metricsRoutes, { prefix: '/internal' });
   await server.register(v1Routes, { prefix: '/v1' });
+  await server.register(dashboardRoutes, { prefix: '/dashboard' });
 
   // Root route
   server.get('/', async (request, reply) => {

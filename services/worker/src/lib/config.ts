@@ -24,6 +24,19 @@ const ConfigSchema = z.object({
   databaseUrlUk: z.string().url(),
   databaseUrlAu: z.string().url(),
 
+  // S3 / MinIO (for archival)
+  s3Endpoint: z.string().url().optional(),
+  s3AccessKeyId: z.string().min(1),
+  s3SecretAccessKey: z.string().min(1),
+  s3Region: z.string().default('us-east-1'),
+  s3ForcePathStyle: z.coerce.boolean().default(false),
+
+  // S3 Buckets per region
+  s3BucketUs: z.string().min(1),
+  s3BucketEu: z.string().min(1),
+  s3BucketUk: z.string().min(1),
+  s3BucketAu: z.string().min(1),
+
   // Worker polling interval (seconds)
   workerPollIntervalSeconds: z.coerce.number().default(5),
 });
@@ -46,6 +59,15 @@ export function loadConfig(): Config {
     databaseUrlEu: process.env.DATABASE_URL_EU,
     databaseUrlUk: process.env.DATABASE_URL_UK,
     databaseUrlAu: process.env.DATABASE_URL_AU,
+    s3Endpoint: process.env.S3_ENDPOINT,
+    s3AccessKeyId: process.env.S3_ACCESS_KEY_ID,
+    s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+    s3Region: process.env.S3_REGION,
+    s3ForcePathStyle: process.env.S3_FORCE_PATH_STYLE,
+    s3BucketUs: process.env.S3_BUCKET_US,
+    s3BucketEu: process.env.S3_BUCKET_EU,
+    s3BucketUk: process.env.S3_BUCKET_UK,
+    s3BucketAu: process.env.S3_BUCKET_AU,
     workerPollIntervalSeconds: process.env.WORKER_POLL_INTERVAL_SECONDS,
   };
 
@@ -70,6 +92,20 @@ export function getDatabaseUrl(region: Region): string {
       return cfg.databaseUrlUk;
     case 'AU':
       return cfg.databaseUrlAu;
+  }
+}
+
+export function getS3Bucket(region: Region): string {
+  const cfg = loadConfig();
+  switch (region) {
+    case 'US':
+      return cfg.s3BucketUs;
+    case 'EU':
+      return cfg.s3BucketEu;
+    case 'UK':
+      return cfg.s3BucketUk;
+    case 'AU':
+      return cfg.s3BucketAu;
   }
 }
 
