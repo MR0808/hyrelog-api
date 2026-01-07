@@ -26,7 +26,79 @@ const QueryEventsSchema = z.object({
   workspaceId: z.string().uuid().optional(),
 });
 
+const CreateCompanySchema = z.object({
+  name: z.string().min(1).max(100),
+  dataRegion: z.enum(['US', 'EU', 'APAC']).default('US'),
+  companySize: z.string().optional(),
+  industry: z.string().optional(),
+  useCase: z.string().optional(),
+});
+
 export const companyRoutes: FastifyPluginAsync = async (fastify) => {
+  /**
+   * POST /dashboard/companies
+   * Create a new company
+   */
+  fastify.post('/companies', async (request, reply) => {
+    if (!request.dashboardAuth || !request.prisma) {
+      return reply.code(401).send({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+    }
+
+    const { userId, userEmail, userRole } = request.dashboardAuth;
+
+    // Validate request body
+    const bodyResult = CreateCompanySchema.safeParse(request.body);
+    if (!bodyResult.success) {
+      return reply.code(400).send({
+        error: 'Validation error',
+        code: 'VALIDATION_ERROR',
+        details: bodyResult.error.errors,
+      });
+    }
+
+    const { name, dataRegion, companySize, industry, useCase } = bodyResult.data;
+    const prisma = request.prisma;
+
+    try {
+      // Create company with FREE plan by default
+      const company = await prisma.company.create({
+        data: {
+          name,
+          dataRegion,
+          planTier: 'FREE',
+          billingStatus: 'ACTIVE',
+          companySize,
+          industry,
+          useCase,
+        },
+        include: {
+          plan: true,
+        },
+      });
+
+      // Log audit action
+      await logDashboardAction(prisma, request, {
+        action: 'COMPANY_CREATED',
+        actorUserId: userId,
+        actorEmail: userEmail,
+        actorRole: userRole,
+        targetCompanyId: company.id,
+        metadata: { name, dataRegion },
+      });
+
+      return reply.code(201).send({
+        id: company.id,
+        name: company.name,
+        dataRegion: company.dataRegion,
+        planTier: company.planTier,
+        createdAt: company.createdAt.toISOString(),
+      });
+    } catch (error: any) {
+      logger.error({ err: error, userId }, 'Dashboard: Failed to create company');
+      return reply.code(500).send({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
   /**
    * GET /dashboard/company
    * Get company summary with plan and region
